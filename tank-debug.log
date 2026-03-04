@@ -1,0 +1,11 @@
+warning: Git tree '/home/jhhuh/Sync/repos/active/tmux' is dirty
+DEBUG: starting
+DEBUG: shell = /nix/store/2hjsch59amjs3nbgh7ahcfzm2bfwl8zi-bash-5.3p9/bin/bash
+DEBUG: getting terminal attrs
+DEBUG: setting raw mode
+DEBUG: setting stdin non-blocking
+DEBUG: setting stdout no-buffering
+DEBUG: spawning PTY
+DEBUG: setting pty fd non-blocking
+DEBUG: starting pty reader
+DEBUG: entering input loop

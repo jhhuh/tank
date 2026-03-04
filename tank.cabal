@@ -1,0 +1,105 @@
+cabal-version:   3.0
+name:            tank
+version:         0.1.0.0
+synopsis:        Protocol-centric workspace system
+description:
+  Tank is a protocol-centric workspace system with terminal multiplexing,
+  per-pane coding agents, and seamless session migration.
+license:         ISC
+license-file:    LICENSE
+author:          jhhuh
+build-type:      Simple
+
+common warnings
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates
+               -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
+
+library
+  import:           warnings
+  exposed-modules:
+    Tank.Core.CRDT
+    Tank.Core.Types
+    Tank.Core.Protocol
+    Tank.Daemon.Main
+    Tank.Daemon.Socket
+    Tank.Daemon.Router
+    Tank.Daemon.State
+    Tank.Plug.Terminal
+    Tank.Plug.Operator
+    Tank.Plug.Operator.Overlay
+    Tank.Plug.Operator.Tools
+    Tank.Terminal.Emulator
+    Tank.Terminal.Grid
+  build-depends:
+    , base           >= 4.17  && < 5
+    , bytestring     >= 0.11  && < 1
+    , containers     >= 0.6   && < 1
+    , directory      >= 1.3   && < 2
+    , filepath       >= 1.4   && < 2
+    , network        >= 3.1   && < 4
+    , posix-pty      >= 0.2   && < 1
+    , process        >= 1.6   && < 2
+    , stm            >= 2.5   && < 3
+    , text           >= 2.0   && < 3
+    , unix           >= 2.7   && < 3
+    , uuid           >= 1.3   && < 2
+    , vector         >= 0.13  && < 1
+    , aeson          >= 2.1   && < 3
+    , http-client    >= 0.7   && < 1
+    , http-client-tls >= 0.3  && < 1
+    , terminal-size   >= 0.3  && < 1
+  hs-source-dirs:   src
+  default-language: GHC2021
+
+executable tank
+  import:           warnings
+  main-is:          Main.hs
+  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    , base  >= 4.17 && < 5
+    , tank
+    , text  >= 2.0  && < 3
+  hs-source-dirs:   app
+  default-language: GHC2021
+
+executable tank-debug
+  import:           warnings
+  main-is:          Debug.hs
+  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    , base        >= 4.17 && < 5
+    , bytestring  >= 0.11 && < 1
+    , posix-pty   >= 0.2  && < 1
+    , process     >= 1.6  && < 2
+    , unix        >= 2.7  && < 3
+  hs-source-dirs:   app
+  default-language: GHC2021
+
+test-suite tank-tests
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          Spec.hs
+  other-modules:
+    Tank.Core.CRDTSpec
+    Tank.Terminal.EmulatorSpec
+    Tank.Terminal.GridSpec
+    Tank.Plug.Operator.ToolsSpec
+    Tank.Plug.TerminalSpec
+  build-depends:
+    , base         >= 4.17 && < 5
+    , tank
+    , hspec        >= 2.10 && < 3
+    , bytestring   >= 0.11 && < 1
+    , containers   >= 0.6  && < 1
+    , posix-pty    >= 0.2  && < 1
+    , process      >= 1.6  && < 2
+    , unix         >= 2.7  && < 3
+    , uuid         >= 1.3  && < 2
+    , QuickCheck   >= 2.14 && < 3
+    , temporary    >= 1.3  && < 2
+    , text         >= 2.0  && < 3
+    , filepath     >= 1.4  && < 2
+    , vector       >= 0.13 && < 1
+  hs-source-dirs:   tests
+  default-language: GHC2021
+  build-tool-depends: hspec-discover:hspec-discover

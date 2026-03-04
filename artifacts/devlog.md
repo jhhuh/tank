@@ -1,0 +1,110 @@
+# Tank Development Log
+
+Append-only. Newest entries at the bottom.
+
+---
+
+## 2026-03-04 — Project inception
+
+**Why tank exists:**
+Inspired by tmux's terminal multiplexer architecture, but designed from scratch
+as a protocol-centric workspace system. The tmux codebase was analyzed and found
+to be highly monolithic (15+ global variables, no plugin system, tightly coupled
+subsystems) — not suitable for forking or library use.
+
+**Key design decisions:**
+- Protocol-first: Cap'n Proto binary schema as the source of truth
+- Everything is a plug: terminal UI, coding agents, devshell manager
+- CRDT state sync with spatial jitter buffer for terminal screens
+- Epoch-based clear screen (O(1) instead of O(W×H))
+- Transport fallback: QUIC → TCP → WebSocket
+- Hub daemon topology with tank-to-tank federation
+- Named after Tank from The Matrix (the operator)
+- Plugs called "plugs" (from "plugged in" to the Matrix)
+
+**IDL decision:** Cap'n Proto chosen over FlatBuffers/Protobuf/MsgPack.
+Reasons: zero-copy reads, mutable messages (for in-place CRDT cell updates),
+canonical form (byte-equality for convergence checks), cache-friendly
+fixed-offset reads (no vtable indirection).
+
+**Language decision:** Haskell first (easiest to inspect for the author),
+then Rust, then Zig. Protocol spec is language-agnostic.
+
+**Terminal screen CRDT innovations:**
+1. Spatial jitter buffer: hidden above (scrollback cache) + live screen +
+   hidden below (absorbs early-arriving content). All addressed by absolute
+   line numbers.
+2. Epoch-based clear: clear screen increments an epoch counter (one CRDT op).
+   Cells tagged with old epochs are treated as blank.
+3. Viewport position as independent CRDT value: content and viewport updates
+   can arrive in any order.
+
+**References:**
+- Protocol design: `docs-site/docs/protocol.md`
+- Architecture: `docs-site/docs/architecture.md`
+- Mosh paper: https://mosh.org/mosh-paper.pdf
+
+---
+
+## 2026-03-05 — Terminal multiplexer features + VT100 emulator
+
+**Root cause of terminal freeze:** Missing `-threaded` GHC flag. Without it,
+all `forkIO` green threads share one OS thread, so `threadWaitRead` on stdin
+starved the PTY reader thread. Fixed by adding `-threaded -rtsopts -with-rtsopts=-N`.
+
+**VT100 emulator:** Built from scratch (~600 lines). Supports: cursor movement,
+SGR (16+256 colors, bold/dim/underline/inverse), erase (ED/EL/ECH), scroll
+regions (DECSTBM), insert/delete line/char, alt screen, line wrapping, resize.
+Scrollback buffer (1000 lines max). 46 tests.
+
+**Multi-window + pane splitting:** Windows have layout trees
+(`LPane | LSplit dir ratio l1 l2`). Ctrl-B c/n/p/0-9 for windows,
+Ctrl-B %/" for splits, Ctrl-B o to cycle panes. Single-pane windows use
+raw PTY passthrough; multi-pane renders from VTerm grid with SGR attributes.
+
+**Agent overlay improvements:** Tool use/results now display in real-time via
+progress callback. Overlay shows `[tool: execute: ls]` and `→ result...`
+messages with status updates.
+
+**Copy mode:** Ctrl-B [ enters copy mode. j/k/Ctrl-U/Ctrl-D to scroll through
+scrollback. q/Escape to exit. Renders scrollback + screen with full SGR attrs.
+
+**Key bugs fixed:**
+- UTF-8 rendering: `BS8.pack` truncates Unicode > 0xFF. Use `encodeUtf8` everywhere.
+- Overlay close: Ctrl-B was consumed by overlay handler. Restructured input loop
+  so prefix detection happens before overlay routing.
+- Scroll region: Set DECSTBM to confine PTY output above status line.
+
+## 2026-03-06 — Concept mockup renderer + layout language vision
+
+**Mockup renderer:**
+Created `docs-site/docs/assets/concepts/render-concepts.py` — generates terminal
+concept images showing how tank will look (8 scenarios: idle, overlay, tool-exec,
+multi-pane, copy-mode, window switching, detach/reattach).
+
+Evolution: SVG (manual) → ANSI+aha+wkhtmltoimage (HTML unstable) → **Pillow direct
+rendering** (current). Pillow approach: ANSI output → parse into cell grid → render
+each cell with DejaVu Sans Mono TTF → window chrome via Pillow drawing primitives.
+Packaged as nix derivation (`nix build .#concept-images`). No HTML, no browser.
+
+**Future: terminal layout DSL + independent rendering package**
+
+User vision (captured from conversation):
+- "Maybe a language that acts like HTML/CSS but for terminal console"
+- "Layout language is what we need"
+- "Independent cabal package so we can publish independently"
+- "Can we use libvterm without GUI backend? Hijack the draw command stream"
+- "UI/UX is very important — design is a key point of this project"
+
+Proposed architecture for `tank-render` (independent cabal package):
+1. **Layout DSL** — declarative terminal UI descriptions (panes, overlays,
+   status bars, borders) analogous to HTML/CSS for terminals
+2. **VT100 state machine** — libvterm FFI or tank's own parser. Feeds ANSI
+   into a virtual screen buffer, reads back cell grid (char + attrs)
+3. **Pixel renderer** — reads cell grid + monospace TTF font, renders to PNG.
+   No xorg/GUI needed — just font rasterization (freetype) + image output
+4. **Dual-target** — same layout description renders both to live terminal
+   (ANSI output) and to static images (PNG for docs)
+
+This package would serve both tank's documentation and its actual UI renderer,
+ensuring the concept images exactly match the real product.
