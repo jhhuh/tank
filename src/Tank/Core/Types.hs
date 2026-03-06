@@ -36,5 +36,6 @@ data Cell = Cell
   , cellDirectory :: !FilePath
   , cellEnv       :: !(Map Text Text)
   , cellPlugs     :: !(Set PlugId)
+  , cellPtyOwner  :: !(Maybe PlugId)
   , cellGrid      :: !Grid
   } deriving (Show)

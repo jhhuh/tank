@@ -42,6 +42,7 @@ routeMessage ds envelope = case mePayload envelope of
           , cellDirectory = dir
           , cellEnv = Map.empty
           , cellPlugs = Set.empty
+          , cellPtyOwner = Nothing
           , cellGrid = mkGrid (ReplicaId nil) 80 24 100 10
           }
     atomically $ addCell ds cell

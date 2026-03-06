@@ -8,11 +8,15 @@ module Tank.Daemon.State
   , listCells
   , addPlug
   , removePlug
+  , lookupPlug
+  , getCellPlugs
   ) where
 
 import Control.Concurrent.STM
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import System.IO (Handle)
 import Tank.Core.Types (CellId(..), PlugId(..), Cell(..), PlugInfo(..))
 
@@ -59,3 +63,14 @@ addPlug ds pc =
 removePlug :: DaemonState -> PlugId -> STM ()
 removePlug ds pid =
   modifyTVar' (dsPlugs ds) (Map.delete pid)
+
+lookupPlug :: DaemonState -> PlugId -> STM (Maybe PlugConn)
+lookupPlug ds pid =
+  Map.lookup pid <$> readTVar (dsPlugs ds)
+
+getCellPlugs :: DaemonState -> CellId -> STM (Set PlugId)
+getCellPlugs ds cid = do
+  mcell <- getCell ds cid
+  pure $ case mcell of
+    Nothing   -> Set.empty
+    Just cell -> cellPlugs cell
