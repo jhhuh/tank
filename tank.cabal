@@ -31,6 +31,10 @@ library
     Tank.Terminal.CellAdapter
     Tank.Terminal.Emulator
     Tank.Terminal.Grid
+    Tank.Gen.Grid
+    Tank.Gen.Protocol
+    Tank.Gen.ById.Xa3e8f1b2c4d56789
+    Tank.Gen.ById.Xb7c5e3a9f1d24680
   build-depends:
     , base           >= 4.17  && < 5
     , bytestring     >= 0.11  && < 1
