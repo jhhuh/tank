@@ -55,21 +55,35 @@ titleBarHeight = 38
 frameRadius :: Float
 frameRadius = 10
 
+-- Inner padding between window frame and terminal content (pixels)
+innerPadX :: Int
+innerPadX = 10
+
+innerPadTop :: Int
+innerPadTop = 6
+
+innerPadBottom :: Int
+innerPadBottom = 6
+
 -- Traffic light button colors
 trafficRed, trafficYellow, trafficGreen :: PixelRGBA8
 trafficRed    = PixelRGBA8 0xff 0x5f 0x56 255
 trafficYellow = PixelRGBA8 0xff 0xbd 0x2e 255
 trafficGreen  = PixelRGBA8 0x27 0xc9 0x3f 255
 
--- | Compute monospace cell dimensions from font metrics.
-cellDimensions :: Font -> Int -> (Int, Int)
+-- | Compute monospace cell dimensions and ascent from font metrics.
+-- Returns (cellWidth, cellHeight, ascent) where ascent is the distance
+-- from the top of the cell to the text baseline.
+cellDimensions :: Font -> Int -> (Int, Int, Float)
 cellDimensions font fontSize =
   let dpi = 96
       ptSize = pixelSizeInPointAtDpi (fromIntegral fontSize) dpi
       bbox = stringBoundingBox font dpi ptSize "M"
       cellW = max 1 (ceiling (_xMax bbox))
-      cellH = max 1 (ceiling (_yMax bbox))
-  in (cellW, cellH)
+      ascent = _yMax bbox
+      -- Cell height includes some line spacing (ascent + ~20% for descenders/spacing)
+      cellH = max 1 (ceiling (ascent * 1.25))
+  in (cellW, cellH, ascent)
 
 -- | Convert pixel size to PointSize at a given DPI.
 pixelSizeInPointAtDpi :: Float -> Int -> PointSize
@@ -79,22 +93,25 @@ pixelSizeInPointAtDpi px dpi = PointSize (px * 72.0 / fromIntegral dpi)
 renderImage :: PNGConfig -> Font -> CellGrid -> Image PixelRGBA8
 renderImage config font grid =
   let fontSize  = pngFontSize config
-      (cellW, cellH) = cellDimensions font fontSize
+      (cellW, cellH, ascent) = cellDimensions font fontSize
       cols      = gridWidth grid
       rows      = gridHeight grid
       termW     = cols * cellW
       termH     = rows * cellH
       chrome    = if pngTitleBar config then titleBarHeight else 0
       pad       = pngPadding config
-      imgW      = termW + 2 * pad
-      imgH      = termH + chrome + 2 * pad
+      -- Window includes inner padding around terminal content
+      winContentW = termW + 2 * innerPadX
+      winContentH = termH + chrome + innerPadTop + innerPadBottom
+      imgW      = winContentW + 2 * pad
+      imgH      = winContentH + 2 * pad
       dpi       = 96
       ptSize    = pixelSizeInPointAtDpi (fromIntegral fontSize) dpi
   in renderDrawing imgW imgH bodyColor $ do
        let winX = fromIntegral pad
            winY = fromIntegral pad
-           winW = fromIntegral termW
-           winH = fromIntegral (termH + chrome)
+           winW = fromIntegral winContentW
+           winH = fromIntegral winContentH
 
        -- Window border (rounded rectangle outline)
        drawBorderRect (winX - 1) (winY - 1) (winW + 2) (winH + 2) (frameRadius + 1) borderColor
@@ -120,13 +137,14 @@ renderImage config font grid =
          withTexture (uniformTexture titleTextColor) $
            printTextAt font (toPointSize (fromIntegral fontSize - 2) dpi) (V2 (winX + winW / 2 - estimateTextWidth font (fromIntegral fontSize - 2) (pngWindowTitle config) / 2) (winY + 11)) (pngWindowTitle config)
 
-       -- Terminal content
-       let contentY = winY + fromIntegral chrome
-       drawCells config font grid winX contentY cellW cellH ptSize
+       -- Terminal content (offset by inner padding)
+       let contentX = winX + fromIntegral innerPadX
+           contentY = winY + fromIntegral chrome + fromIntegral innerPadTop
+       drawCells font grid contentX contentY cellW cellH ascent ptSize
 
 -- | Draw all cells from the grid.
-drawCells :: PNGConfig -> Font -> CellGrid -> Float -> Float -> Int -> Int -> PointSize -> Drawing PixelRGBA8 ()
-drawCells _config font grid originX originY cellW cellH ptSize = do
+drawCells :: Font -> CellGrid -> Float -> Float -> Int -> Int -> Float -> PointSize -> Drawing PixelRGBA8 ()
+drawCells font grid originX originY cellW cellH textAscent ptSize = do
   let rows = gridRows grid
       cw = fromIntegral cellW
       ch = fromIntegral cellH
@@ -139,11 +157,11 @@ drawCells _config font grid originX originY cellW cellH ptSize = do
       let bg = cellBgPixel (cellBg cell)
       drawFilledRect x y cw ch bg
 
-      -- Foreground character
+      -- Foreground character (offset by ascent for proper baseline positioning)
       when (cellChar cell /= ' ') $ do
         let fg = cellFgPixel (cellFg cell)
         withTexture (uniformTexture fg) $
-          printTextAt font ptSize (V2 x y) [cellChar cell]
+          printTextAt font ptSize (V2 x (y + textAscent)) [cellChar cell]
 
 -- | Convert a Cell Color to PixelRGBA8 for foreground.
 cellFgPixel :: Color -> PixelRGBA8
