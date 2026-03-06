@@ -96,6 +96,7 @@ test-suite tank-tests
     Tank.Plug.Operator.ToolsSpec
     Tank.Plug.TerminalSpec
     Tank.Terminal.CellAdapterSpec
+    Tank.Daemon.RouterSpec
   build-depends:
     , base         >= 4.17 && < 5
     , tank
@@ -103,6 +104,7 @@ test-suite tank-tests
     , hspec        >= 2.10 && < 3
     , bytestring   >= 0.11 && < 1
     , containers   >= 0.6  && < 1
+    , stm          >= 2.5  && < 3
     , posix-pty    >= 0.2  && < 1
     , process      >= 1.6  && < 2
     , unix         >= 2.7  && < 3
