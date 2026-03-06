@@ -3,8 +3,8 @@
 !!! warning "Work in Progress"
 
     These are concept mockups showing how Tank will look. They are generated
-    programmatically from
-    [`render-concepts.py`](https://github.com/jhhuh/tank/blob/master/docs-site/docs/assets/concepts/render-concepts.py)
+    by the `tank-render-concepts` binary from the
+    [`tank-layout`](https://github.com/jhhuh/tank/tree/master/tank-layout) package
     and reflect the current design direction — not a finished product.
 
     To regenerate: `nix build .#concept-images`

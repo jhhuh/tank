@@ -38,10 +38,9 @@ bgRGB, fgRGB :: RGB
 bgRGB      = hexRGB 0x1a 0x1b 0x26
 fgRGB      = hexRGB 0xc0 0xca 0xf5
 
-titleBarRGB, borderRGB, bodyRGB, titleTextRGB :: RGB
+titleBarRGB, borderRGB, titleTextRGB :: RGB
 titleBarRGB  = hexRGB 0x24 0x28 0x3b
 borderRGB    = hexRGB 0x3b 0x42 0x61
-bodyRGB      = hexRGB 0x13 0x14 0x1c
 titleTextRGB = hexRGB 0x56 0x5f 0x89
 
 trafficRedRGB, trafficYellowRGB, trafficGreenRGB :: RGB
@@ -117,9 +116,7 @@ renderMultiPNG config frames = do
 
   withImageSurface FormatARGB32 imgW imgH $ \surface -> do
     renderWith surface $ do
-      -- Body background
-      setRGB bodyRGB
-      paint
+      -- Background is transparent (ARGB32 surface initializes to fully transparent)
 
       -- Draw each frame with arrows between them
       let go _ [] = pure ()
