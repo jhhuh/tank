@@ -15,6 +15,7 @@ library
   import:           warnings
   exposed-modules:
     Tank.Layout
+    Tank.Layout.Cell
   build-depends:
     , base        >= 4.17 && < 5
     , text        >= 2.0  && < 3
@@ -36,4 +37,4 @@ test-suite tank-layout-tests
     , vector       >= 0.13 && < 1
   hs-source-dirs:   test
   default-language: GHC2021
-  build-tool-depends: hspec-discover:hspec-discover
+  -- hspec-discover provided on PATH by nix devShell
