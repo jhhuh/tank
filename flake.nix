@@ -14,6 +14,7 @@
         haskellPackages = pkgs.haskellPackages.override {
           overrides = hself: hsuper: {
             tank = hself.callCabal2nix "tank" ./. {};
+            tank-layout = hself.callCabal2nix "tank-layout" ./tank-layout {};
           };
         };
 
@@ -52,7 +53,7 @@
         };
 
         devShells.default = haskellPackages.shellFor {
-          packages = p: [ p.tank ];
+          packages = p: [ p.tank p.tank-layout ];
           nativeBuildInputs = with pkgs; [
             # Haskell tooling
             cabal-install

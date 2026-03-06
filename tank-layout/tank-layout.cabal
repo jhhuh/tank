@@ -1,0 +1,39 @@
+cabal-version:   3.0
+name:            tank-layout
+version:         0.1.0.0
+synopsis:        Declarative terminal layout language with ANSI and PNG backends
+license:         MIT
+license-file:    ../LICENSE
+author:          jhhuh
+build-type:      Simple
+
+common warnings
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates
+               -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
+
+library
+  import:           warnings
+  exposed-modules:
+    Tank.Layout
+  build-depends:
+    , base        >= 4.17 && < 5
+    , text        >= 2.0  && < 3
+    , bytestring  >= 0.11 && < 1
+    , vector      >= 0.13 && < 1
+    , containers  >= 0.6  && < 1
+  hs-source-dirs:   src
+  default-language: GHC2021
+
+test-suite tank-layout-tests
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          Spec.hs
+  build-depends:
+    , base         >= 4.17 && < 5
+    , tank-layout
+    , hspec        >= 2.10 && < 3
+    , text         >= 2.0  && < 3
+    , vector       >= 0.13 && < 1
+  hs-source-dirs:   test
+  default-language: GHC2021
+  build-tool-depends: hspec-discover:hspec-discover
