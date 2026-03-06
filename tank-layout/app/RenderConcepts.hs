@@ -71,11 +71,12 @@ statusBar left right =
       gap = max 0 (termW - leftLen - rightLen)
   in left ++ [Span (T.replicate gap " ") (SpanStyle (Just barBg) False False)] ++ right
 
--- | Create a status bar layout with background
-statusBarLayout :: [Span] -> [Span] -> Layout
-statusBarLayout left right =
-  Styled defaultStyle { sBg = Just barBg }
-    (spans (statusBar left right))
+-- | Like withStatusBar, but with barBg background color applied.
+withColorBar :: Layout -> [Span] -> [Span] -> Layout
+withColorBar content left right =
+  vsplit (-1) content
+    (Styled defaultStyle { sBg = Just barBg }
+      (spans (statusBar left right)))
 
 -- | Full-width line padded to terminal width
 padLine :: [Span] -> [Span]
@@ -90,7 +91,7 @@ scenario contentLines barLeft barRight =
   let totalLines = length contentLines
       padded = contentLines ++ replicate (max 0 (termH - 1 - totalLines)) [s (T.replicate termW " ")]
       allSpans = concatMap (\l -> padLine l ++ [nl]) (init padded) ++ padLine (last padded)
-  in withStatusBar (spans allSpans) (statusBar barLeft barRight)
+  in withColorBar (spans allSpans) barLeft barRight
 
 -- | Prompt helper
 prompt :: Text -> [Span]
@@ -217,7 +218,7 @@ scenario02 =
 
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c blue "0:bash", s " ", d dim "|", s " ", c grey "~/projects/webapp"]
       barRight = [d dim "Esc: close overlay", s " ", d dim "|", s " ", c yellow "reading"]
-  in withStatusBar combined (statusBar barLeft barRight)
+  in withColorBar combined barLeft barRight
 
 -- ============================================================
 -- Scenario 03: Tool Exec (full-screen agent overlay)
@@ -260,7 +261,7 @@ scenario03 =
 
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c blue "0:bash", s " ", d dim "|", s " ", c grey "~/projects/webapp"]
       barRight = [d dim "|", s " ", c green "done"]
-  in withStatusBar overlayLayout (statusBar barLeft barRight)
+  in withColorBar overlayLayout barLeft barRight
 
 -- ============================================================
 -- Scenario 04: Multi-Pane (horizontal split: editor + tests)
@@ -332,7 +333,7 @@ scenario04 =
 
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c blue "0:edit", s " ", c grey "1:test", s " ", d dim "|", s " ", c grey "2 panes"]
       barRight = [d dim "Ctrl-B a: agent", s " ", d dim "|", s " ", c grey "idle"]
-  in withStatusBar mainContent (statusBar barLeft barRight)
+  in withColorBar mainContent barLeft barRight
 
 -- ============================================================
 -- Scenario 05: Multi-Agent
@@ -432,7 +433,7 @@ scenario05 =
 
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c grey "0:test", s " ", c blue "1:shell", s " ", d dim "|", s " ", c grey "2 panes"]
       barRight = [d dim "Esc: close overlay", s " ", d dim "|", s " ", c yellow "writing", s " ", c green "done"]
-  in withStatusBar mainContent (statusBar barLeft barRight)
+  in withColorBar mainContent barLeft barRight
 
 -- ============================================================
 -- Scenario 06: Windows (command palette)
@@ -476,7 +477,7 @@ scenario06 =
       -- Highlight active window tab with inverted colors
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c grey "0:edit", s " ", c grey "1:test", s " ", Span " 2:logs " (SpanStyle (Just (RGB 26 27 38)) True False), s " ", c grey "3:shell", s " ", d dim "|", s " ", c grey "session: webapp-dev"]
       barRight = [d dim "Ctrl-B ?: help"]
-  in withStatusBar mainContent (statusBar barLeft barRight)
+  in withColorBar mainContent barLeft barRight
 
 -- ============================================================
 -- Scenario 07: Services
@@ -552,7 +553,7 @@ scenario07 =
 
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c blue "0:bash", s " ", d dim "|", s " ", c grey "~/projects/webapp"]
       barRight = [d dim "Ctrl-B s: services", s " ", d dim "|", s " ", c red "1 crashed"]
-  in withStatusBar mainContent (statusBar barLeft barRight)
+  in withColorBar mainContent barLeft barRight
 
 -- ============================================================
 -- Scenario 08: Services Logs
@@ -647,7 +648,7 @@ scenario08 =
 
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c blue "0:bash", s " ", d dim "|", s " ", c grey "~/projects/webapp"]
       barRight = [d dim "Ctrl-B s: services", s " ", d dim "|", s " ", c red "1 crashed"]
-  in withStatusBar mainContent (statusBar barLeft barRight)
+  in withColorBar mainContent barLeft barRight
 
 -- ============================================================
 -- Scenario 09: Detach/Reattach (three stacked frames)
@@ -668,7 +669,7 @@ scenario09a h =
       allSpans = concatMap (\l -> padLine l ++ [nl]) (init paddedContent) ++ padLine (last paddedContent)
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c grey "0:edit", s " ", c grey "1:test", s " ", Span " 2:logs " (SpanStyle (Just (RGB 26 27 38)) True False), s " ", c grey "3:shell", s " ", d dim "|", s " ", c grey "webapp-dev"]
       barRight = [d dim "|", s " ", c grey "idle"]
-  in withStatusBar (spans allSpans) (statusBar barLeft barRight)
+  in withColorBar (spans allSpans) barLeft barRight
 
 -- Frame 2: Shell after detach
 scenario09b :: Int -> Layout
@@ -706,7 +707,7 @@ scenario09c h =
       allSpans = concatMap (\l -> padLine l ++ [nl]) (init paddedContent) ++ padLine (last paddedContent)
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c grey "0:edit", s " ", c grey "1:test", s " ", Span " 2:logs " (SpanStyle (Just (RGB 26 27 38)) True False), s " ", c grey "3:shell", s " ", d dim "|", s " ", c grey "webapp-dev"]
       barRight = [d dim "|", s " ", c grey "idle"]
-  in withStatusBar (spans allSpans) (statusBar barLeft barRight)
+  in withColorBar (spans allSpans) barLeft barRight
 
 -- ============================================================
 -- Utility
@@ -749,19 +750,13 @@ renderDetach path config = do
       grid1 = renderLayout termW h1 (scenario09a h1)
       grid2 = renderLayout termW h2 (scenario09b h2)
       grid3 = renderLayout termW h3 (scenario09c h3)
-      gapGrid = mkGrid termW 2
-      combined = stackGrids [grid1, gapGrid, grid2, gapGrid, grid3]
-      tallConfig = config
-        { pngWindowTitle = "tank \x2014 detach/reattach"
-        , pngTitleBar = True
-        }
-  tallPng <- renderPNG tallConfig combined
+      cfg = config { pngTitleBar = True }
+  tallPng <- renderMultiPNG cfg
+    [ ("tank \x2014 webapp-dev", grid1)
+    , ("Terminal", grid2)
+    , ("tank \x2014 webapp-dev", grid3)
+    ]
   LBS.writeFile path tallPng
-
--- | Stack multiple grids vertically into one grid
-stackGrids :: [CellGrid] -> CellGrid
-stackGrids [] = mkGrid 0 0
-stackGrids gs = CellGrid $ foldl1 (\a b_ -> a <> b_) (map gridRows gs)
 
 scenarios :: String -> [Scenario]
 scenarios outdir =

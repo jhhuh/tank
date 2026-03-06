@@ -1,5 +1,6 @@
 module Tank.Layout.Backend.PNG
   ( renderPNG
+  , renderMultiPNG
   , PNGConfig(..)
   , defaultPNGConfig
   ) where
@@ -70,9 +71,14 @@ colorToRGB :: Color -> RGB -> RGB
 colorToRGB Default     def = def
 colorToRGB (RGB r g b) _   = hexRGB r g b
 
--- | Render a CellGrid to a PNG image as lazy ByteString.
+-- | Render a single CellGrid to a PNG image.
 renderPNG :: PNGConfig -> CellGrid -> IO LBS.ByteString
-renderPNG config grid = do
+renderPNG config grid = renderMultiPNG config [(pngWindowTitle config, grid)]
+
+-- | Render multiple grids as stacked window frames in a single PNG.
+-- Each frame gets its own window chrome (title bar, traffic lights, border).
+renderMultiPNG :: PNGConfig -> [(String, CellGrid)] -> IO LBS.ByteString
+renderMultiPNG config frames = do
   let fontSize = fromIntegral (pngFontSize config) :: Double
 
   -- Get font metrics using a temporary surface
@@ -88,16 +94,26 @@ renderPNG config grid = do
           ch  = max 1 (ceiling (a + d) :: Int)
       pure (cw, ch, a)
 
-  let cols = gridWidth grid
-      rows = gridHeight grid
-      termW = cols * cellW
-      termH = rows * cellH
-      chrome = if pngTitleBar config then titleBarHeight else 0
+  let chrome = if pngTitleBar config then titleBarHeight else 0
       pad = pngPadding config
-      winContentW = termW + 2 * innerPadX
-      winContentH = termH + chrome + innerPadTop + innerPadBottom
-      imgW = winContentW + 2 * pad
-      imgH = winContentH + 2 * pad
+      gapBetween = 16 :: Int  -- pixels between frames
+
+      -- Per-frame window dimensions
+      winDims = map (\(_, g) ->
+        let tw = gridWidth g * cellW
+            th = gridHeight g * cellH
+        in ( tw + 2 * innerPadX
+           , th + chrome + innerPadTop + innerPadBottom
+           )) frames
+
+      maxWinW = case winDims of
+        [] -> 100
+        _  -> maximum (map fst winDims)
+      totalFrameH = sum (map snd winDims)
+      totalGapH = gapBetween * max 0 (length frames - 1)
+
+      imgW = maxWinW + 2 * pad
+      imgH = totalFrameH + totalGapH + 2 * pad
 
   withImageSurface FormatARGB32 imgW imgH $ \surface -> do
     renderWith surface $ do
@@ -105,78 +121,15 @@ renderPNG config grid = do
       setRGB bodyRGB
       paint
 
-      let wx = fromIntegral pad
-          wy = fromIntegral pad
-          ww = fromIntegral winContentW
-          wh = fromIntegral winContentH
-
-      -- Window border
-      setRGB borderRGB
-      setLineWidth 1
-      roundedRect (wx - 1) (wy - 1) (ww + 2) (wh + 2) (frameRadius + 1)
-      stroke
-
-      -- Window background
-      setRGB bgRGB
-      roundedRect wx wy ww wh frameRadius
-      fill
-
-      -- Title bar
-      when (pngTitleBar config) $ do
-        let tbH = fromIntegral chrome
-
-        -- Title bar background (top rounded, bottom square)
-        setRGB titleBarRGB
-        roundedRect wx wy ww tbH frameRadius
-        fill
-        -- Square off the bottom of title bar
-        rectangle wx (wy + tbH - frameRadius) ww frameRadius
-        fill
-
-        -- Traffic lights
-        let btnCY = wy + tbH / 2
-        filledCircle (wx + 18) btnCY 7 trafficRedRGB
-        filledCircle (wx + 38) btnCY 7 trafficYellowRGB
-        filledCircle (wx + 58) btnCY 7 trafficGreenRGB
-
-        -- Title text (centered)
-        selectFontFace (pngFontFamily config) FontSlantNormal FontWeightNormal
-        setFontSize (fontSize - 2)
-        fe <- fontExtents
-        te <- textExtents (pngWindowTitle config)
-        let titleW = textExtentsXadvance te
-            titleAsc = fontExtentsAscent fe
-            titleDesc = fontExtentsDescent fe
-        setRGB titleTextRGB
-        moveTo (wx + ww / 2 - titleW / 2) (wy + tbH / 2 + (titleAsc - titleDesc) / 2)
-        showText (pngWindowTitle config)
-
-      -- Terminal content
-      let cx = wx + fromIntegral innerPadX
-          cy = wy + fromIntegral chrome + fromIntegral innerPadTop
-          cw = fromIntegral cellW
-          ch = fromIntegral cellH
-
-      selectFontFace (pngFontFamily config) FontSlantNormal FontWeightNormal
-      setFontSize fontSize
-
-      V.iforM_ (gridRows grid) $ \rowIdx row ->
-        V.iforM_ row $ \colIdx cell -> do
-          let x = cx + fromIntegral colIdx * cw
-              y = cy + fromIntegral rowIdx * ch
-
-          -- Background
-          let (br, bg', bb) = colorToRGB (cellBg cell) bgRGB
-          setSourceRGB br bg' bb
-          rectangle x y cw ch
-          fill
-
-          -- Foreground character
-          when (cellChar cell /= ' ') $ do
-            let (fr, fg', fb) = colorToRGB (cellFg cell) fgRGB
-            setSourceRGB fr fg' fb
-            moveTo x (y + asc)
-            showText [cellChar cell]
+      -- Draw each frame
+      let go _ [] = pure ()
+          go yOff ((title_, grid):rest) = do
+            let wx = fromIntegral pad
+                wy = fromIntegral yOff
+            drawFrame config fontSize cellW cellH asc wx wy grid title_
+            let winH = gridHeight grid * cellH + chrome + innerPadTop + innerPadBottom
+            go (yOff + winH + gapBetween) rest
+      go pad frames
 
     -- Write PNG to temp file and read back
     (tmpPath, h) <- openTempFile "/tmp" "tank-png-.png"
@@ -185,6 +138,85 @@ renderPNG config grid = do
     bs <- LBS.readFile tmpPath
     removeFile tmpPath
     pure bs
+
+-- | Draw a single window frame (border, chrome, grid content) at the given position.
+drawFrame :: PNGConfig -> Double -> Int -> Int -> Double -> Double -> Double -> CellGrid -> String -> Render ()
+drawFrame config fontSize cellW_ cellH_ asc wx wy grid title_ = do
+  let cols = gridWidth grid
+      rows_ = gridHeight grid
+      tw = cols * cellW_
+      th = rows_ * cellH_
+      chrome = if pngTitleBar config then titleBarHeight else 0
+      ww = fromIntegral (tw + 2 * innerPadX) :: Double
+      wh = fromIntegral (th + chrome + innerPadTop + innerPadBottom) :: Double
+
+  -- Window border
+  setRGB borderRGB
+  setLineWidth 1
+  roundedRect (wx - 1) (wy - 1) (ww + 2) (wh + 2) (frameRadius + 1)
+  stroke
+
+  -- Window background
+  setRGB bgRGB
+  roundedRect wx wy ww wh frameRadius
+  fill
+
+  -- Title bar
+  when (pngTitleBar config) $ do
+    let tbH = fromIntegral chrome
+
+    -- Title bar background (top rounded, bottom square)
+    setRGB titleBarRGB
+    roundedRect wx wy ww tbH frameRadius
+    fill
+    -- Square off the bottom of title bar
+    rectangle wx (wy + tbH - frameRadius) ww frameRadius
+    fill
+
+    -- Traffic lights
+    let btnCY = wy + tbH / 2
+    filledCircle (wx + 18) btnCY 7 trafficRedRGB
+    filledCircle (wx + 38) btnCY 7 trafficYellowRGB
+    filledCircle (wx + 58) btnCY 7 trafficGreenRGB
+
+    -- Title text (centered)
+    selectFontFace (pngFontFamily config) FontSlantNormal FontWeightNormal
+    setFontSize (fontSize - 2)
+    fe <- fontExtents
+    te <- textExtents title_
+    let ttlW = textExtentsXadvance te
+        ttlAsc = fontExtentsAscent fe
+        ttlDesc = fontExtentsDescent fe
+    setRGB titleTextRGB
+    moveTo (wx + ww / 2 - ttlW / 2) (wy + tbH / 2 + (ttlAsc - ttlDesc) / 2)
+    showText title_
+
+  -- Terminal content
+  let cx = wx + fromIntegral innerPadX
+      cy = wy + fromIntegral chrome + fromIntegral innerPadTop
+      cw = fromIntegral cellW_
+      ch = fromIntegral cellH_
+
+  selectFontFace (pngFontFamily config) FontSlantNormal FontWeightNormal
+  setFontSize fontSize
+
+  V.iforM_ (gridRows grid) $ \rowIdx row ->
+    V.iforM_ row $ \colIdx cell -> do
+      let x = cx + fromIntegral colIdx * cw
+          y = cy + fromIntegral rowIdx * ch
+
+      -- Background
+      let (br, bg', bb) = colorToRGB (cellBg cell) bgRGB
+      setSourceRGB br bg' bb
+      rectangle x y cw ch
+      fill
+
+      -- Foreground character
+      when (cellChar cell /= ' ') $ do
+        let (fr, fg', fb) = colorToRGB (cellFg cell) fgRGB
+        setSourceRGB fr fg' fb
+        moveTo x (y + asc)
+        showText [cellChar cell]
 
 -- | Conditional rendering.
 when :: Bool -> Render () -> Render ()
