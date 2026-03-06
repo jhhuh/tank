@@ -46,6 +46,12 @@ import Tank.Terminal.Emulator
   , hasFlag, attrBold, attrDim, attrUnderline, attrInverse
   , vtScrollbackLines, vtScrollbackSize
   )
+import Tank.Terminal.CellAdapter (vtermToCellGrid)
+import Tank.Layout.Render (renderLayout)
+import Tank.Layout.Cell (CellGrid(..))
+import qualified Tank.Layout.Cell as LC
+import Tank.Layout.Types (Layout(..), Dir(..), Content(..))
+import Tank.Layout.Backend.ANSI (renderRowANSI)
 import qualified Data.Vector as V
 
 -- | A single pane: one PTY, one agent overlay, one virtual screen
@@ -420,6 +426,65 @@ getActivePane ts = do
       panes <- readIORef (tsPanes ts)
       pure $ IM.lookup activePid panes
 
+-- | Convert a PaneLayout tree to a tank-layout Layout tree.
+-- Reads VTerm state from each pane and converts to CellContent.
+buildLayout :: IM.IntMap Pane -> PaneLayout -> IO Layout
+buildLayout panes (LPane pid) =
+  case IM.lookup pid panes of
+    Nothing -> pure $ Leaf (Fill ' ' LC.Default)
+    Just pane -> do
+      vterm <- readIORef (pVTerm pane)
+      let lcGrid = vtermToCellGrid vterm
+      pure $ Leaf (CellContent lcGrid)
+buildLayout panes (LSplit dir _ratio l1 l2) = do
+  ll <- buildLayout panes l1
+  rl <- buildLayout panes l2
+  -- PVertical splits columns (left|right) → tank-layout Horizontal (splits width)
+  -- PHorizontal splits rows (top|bottom) → tank-layout Vertical (splits height)
+  let d = case dir of
+        PVertical   -> Horizontal
+        PHorizontal -> Vertical
+  pure $ Split d _ratio ll rl
+
+-- | Emit a CellGrid to stdout, one row per line, at terminal position.
+emitGrid :: CellGrid -> IO ()
+emitGrid (CellGrid rows) = do
+  V.iforM_ rows $ \rowIdx row -> do
+    BS.hPut stdout $ BS8.pack $
+      "\x1b[" ++ show (rowIdx + 1) ++ ";1H"
+    BS.hPut stdout $ renderRowANSI row
+  BS.hPut stdout "\x1b[0m"
+
+-- | Draw pane borders by overwriting split positions.
+-- Preserves active-pane highlighting (green for active, dim for inactive).
+drawPaneBorders :: PaneLayout -> Int -> Int -> Int -> Int -> Int -> IO ()
+drawPaneBorders (LPane _) _ _ _ _ _ = pure ()
+drawPaneBorders (LSplit dir _ratio l1 l2) activePid r c w h = do
+  let activeInL1 = layoutContains activePid l1
+      activeInL2 = layoutContains activePid l2
+      -- Green for border next to active pane, dim for inactive
+      borderSGR = if activeInL1 || activeInL2
+                  then "\x1b[32m"  -- green
+                  else "\x1b[2m"   -- dim
+  case dir of
+    PVertical -> do
+      let w1 = w `div` 2
+      forM_ [0 .. h - 1] $ \row ->
+        BS.hPut stdout $ BS8.pack
+          ("\x1b[" ++ show (r + row + 1) ++ ";" ++ show (c + w1 + 1) ++ "H" ++ borderSGR)
+          <> encodeUtf8 "\x2502"
+      BS.hPut stdout "\x1b[0m"
+      drawPaneBorders l1 activePid r c w1 h
+      drawPaneBorders l2 activePid r (c + w1 + 1) (w - w1 - 1) h
+    PHorizontal -> do
+      let h1 = h `div` 2
+      BS.hPut stdout $ BS8.pack
+        ("\x1b[" ++ show (r + h1 + 1) ++ ";" ++ show (c + 1) ++ "H" ++ borderSGR)
+        <> BS.concat (replicate w (encodeUtf8 "\x2500"))
+      BS.hPut stdout "\x1b[0m"
+      drawPaneBorders l1 activePid r c w h1
+      drawPaneBorders l2 activePid (r + h1 + 1) c w (h - h1 - 1)
+
 -- | Render all visible panes in the active window
 renderAllPanes :: TermState -> IO ()
 renderAllPanes ts = do
@@ -434,54 +499,23 @@ renderAllPanes ts = do
       -- Clear screen
       BS.hPut stdout $ BS8.pack $
         "\x1b[1;" ++ show totalH ++ "r\x1b[2J\x1b[H"
-      -- Render each pane
-      renderPaneLayout ts panes layout activePid 0 0 totalW totalH
+      -- Build layout tree and render to grid
+      tankLayout <- buildLayout panes layout
+      let grid = renderLayout totalW totalH tankLayout
+      emitGrid grid
+      -- Draw borders between panes
+      drawPaneBorders layout activePid 0 0 totalW totalH
+      -- Restore cursor to active pane
+      case IM.lookup activePid panes of
+        Just pane -> do
+          vterm <- readIORef (pVTerm pane)
+          let (cr, cc) = vtGetCursor vterm
+              (pr, pc, _, _) = findPaneRegion layout activePid totalW totalH
+          BS.hPut stdout $ BS8.pack $
+            "\x1b[" ++ show (pr + cr + 1) ++ ";" ++ show (pc + cc + 1) ++ "H"
+        Nothing -> pure ()
       drawStatusLine ts False
       hFlush stdout
-
--- | Render a pane layout tree into screen regions
-renderPaneLayout :: TermState -> IM.IntMap Pane -> PaneLayout -> Int -> Int -> Int -> Int -> Int -> IO ()
-renderPaneLayout _ts panes (LPane pid) activePid r c w h = do
-  case IM.lookup pid panes of
-    Nothing -> pure ()
-    Just pane -> do
-      vterm <- readIORef (pVTerm pane)
-      -- Render VTerm content into region
-      renderVTermAt vterm r c w h
-      -- Show cursor for active pane
-      when (pid == activePid) $ do
-        let (cr, cc) = vtGetCursor vterm
-        BS.hPut stdout $ BS8.pack $
-          "\x1b[" ++ show (r + cr + 1) ++ ";" ++ show (c + cc + 1) ++ "H"
-
-renderPaneLayout ts panes (LSplit dir _ratio l1 l2) activePid r c w h = do
-  let activeInL1 = layoutContains activePid l1
-      -- Green for border next to active pane, dim for inactive
-      borderSGR = if activeInL1 || layoutContains activePid l2
-                  then "\x1b[32m"  -- green
-                  else "\x1b[2m"   -- dim
-  case dir of
-    PVertical -> do
-      let w1 = w `div` 2
-          w2 = w - w1 - 1  -- -1 for border
-      renderPaneLayout ts panes l1 activePid r c w1 h
-      -- Draw vertical border (│ = U+2502)
-      forM_ [0 .. h - 1] $ \row -> do
-        BS.hPut stdout $ BS8.pack
-          ("\x1b[" ++ show (r + row + 1) ++ ";" ++ show (c + w1 + 1) ++ "H" ++ borderSGR)
-          <> encodeUtf8 "\x2502"
-      BS.hPut stdout "\x1b[0m"
-      renderPaneLayout ts panes l2 activePid r (c + w1 + 1) w2 h
-    PHorizontal -> do
-      let h1 = h `div` 2
-          h2 = h - h1 - 1  -- -1 for border
-      renderPaneLayout ts panes l1 activePid r c w h1
-      -- Draw horizontal border (─ = U+2500)
-      BS.hPut stdout $ BS8.pack
-        ("\x1b[" ++ show (r + h1 + 1) ++ ";" ++ show (c + 1) ++ "H" ++ borderSGR)
-        <> BS.concat (replicate w (encodeUtf8 "\x2500"))
-      BS.hPut stdout "\x1b[0m"
-      renderPaneLayout ts panes l2 activePid (r + h1 + 1) c w h2
 
 -- | Render a VTerm into a specific screen region with SGR attributes.
 -- Uses delta-encoding: only emits SGR when attributes change between cells.

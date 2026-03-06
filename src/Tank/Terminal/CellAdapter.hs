@@ -1,10 +1,12 @@
 module Tank.Terminal.CellAdapter
   ( gridToCellGrid
+  , vtermToCellGrid
   , convertGridCell
   , convertColor
   ) where
 
 import qualified Tank.Terminal.Grid as VT
+import qualified Tank.Terminal.Emulator as Em
 import qualified Tank.Layout.Cell as LC
 import qualified Data.Vector as V
 import Data.Word (Word8)
@@ -60,3 +62,28 @@ ansi16 = V.fromList
   , (85,85,85),    (255,85,85),   (85,255,85),   (255,255,85)
   , (85,85,255),   (255,85,255),  (85,255,255),  (255,255,255)
   ]
+
+-- | Convert a VTerm's visible screen to a tank-layout CellGrid.
+-- Uses the public VTerm API (vtGetCell, vtGetSize).
+vtermToCellGrid :: Em.VTerm -> LC.CellGrid
+vtermToCellGrid vt =
+  let (cols, rows) = Em.vtGetSize vt
+      grid = V.generate rows $ \r ->
+        V.generate cols $ \c ->
+          convertEmulatorCell (Em.vtGetCell r c vt)
+  in LC.CellGrid grid
+
+-- | Convert a VTerm Emulator Cell to a tank-layout Cell.
+convertEmulatorCell :: Em.Cell -> LC.Cell
+convertEmulatorCell (Em.Cell ch attrs) = LC.Cell
+  { LC.cellChar = ch
+  , LC.cellFg   = convertEmulatorColor (Em.aFg attrs)
+  , LC.cellBg   = convertEmulatorColor (Em.aBg attrs)
+  , LC.cellBold = Em.hasFlag Em.attrBold attrs
+  , LC.cellDim  = Em.hasFlag Em.attrDim attrs
+  }
+
+-- | Convert VTerm Emulator Color to tank-layout Color.
+convertEmulatorColor :: Em.Color -> LC.Color
+convertEmulatorColor Em.DefaultColor    = LC.Default
+convertEmulatorColor (Em.Color256 n)    = ansi256ToRGB (fromIntegral n)
