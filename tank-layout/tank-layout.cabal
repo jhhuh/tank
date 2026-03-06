@@ -15,6 +15,7 @@ library
   import:           warnings
   exposed-modules:
     Tank.Layout
+    Tank.Layout.Backend.ANSI
     Tank.Layout.Cell
     Tank.Layout.DSL
     Tank.Layout.Render
@@ -38,11 +39,13 @@ test-suite tank-layout-tests
     , hspec        >= 2.10 && < 3
     , text         >= 2.0  && < 3
     , vector       >= 0.13 && < 1
+    , bytestring   >= 0.11 && < 1
   other-modules:
     Tank.Layout.CellSpec
     Tank.Layout.DSLSpec
     Tank.Layout.RenderSpec
     Tank.Layout.TypesSpec
+    Tank.Layout.Backend.ANSISpec
   hs-source-dirs:   test
   default-language: GHC2021
   -- hspec-discover provided on PATH by nix devShell
