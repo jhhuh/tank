@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module Tank.Daemon.Main
   ( startDaemon
   , startDaemonAt
@@ -12,7 +13,7 @@ import System.Directory (removeFile)
 import System.IO (Handle, hClose, hPutStrLn, stderr)
 import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
 import Tank.Core.Types (PlugId(..))
-import Tank.Daemon.Router (routeMessage)
+import Tank.Daemon.Router (RouteAction(..), routeMessage)
 import Tank.Daemon.Socket (listenSocket, socketPath, socketHandle, readEnvelope, writeEnvelope)
 import Tank.Daemon.State (DaemonState, newDaemonState)
 
@@ -51,10 +52,11 @@ handleClient state h = do
   case result of
     Left _err -> pure ()  -- EOF or parse error, exit loop (forkFinally will cleanup)
     Right envelope -> do
-      response <- routeMessage state envelope
-      case response of
-        Just respMsg -> writeEnvelope h (makeResponse envelope respMsg)
-        Nothing -> pure ()
+      actions <- routeMessage state h envelope
+      mapM_ (\case
+        Reply respMsg -> writeEnvelope h (makeResponse envelope respMsg)
+        _ -> pure ()  -- SendTo/Broadcast handled in Task 3
+        ) actions
       handleClient state h  -- loop
 
 -- | Build a response envelope from request envelope + response payload

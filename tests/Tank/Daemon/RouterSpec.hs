@@ -6,6 +6,7 @@ import Data.UUID (nil)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Control.Concurrent.STM
+import System.IO (stdin)
 
 import Tank.Core.Types
 import Tank.Core.Protocol
@@ -19,29 +20,32 @@ spec :: Spec
 spec = describe "Router" $ do
   it "handles MsgListCells with empty state" $ do
     ds <- newDaemonState
-    result <- routeMessage ds (mkEnvelope MsgListCells)
-    result `shouldBe` Just (MsgListCellsResponse [])
+    result <- routeMessage ds stdin (mkEnvelope MsgListCells)
+    result `shouldBe` [Reply (MsgListCellsResponse [])]
 
-  it "handles MsgPlugRegister" $ do
+  it "handles MsgPlugRegister and stores plug" $ do
     ds <- newDaemonState
     let info = PlugInfo (PlugId nil) "test-plug" Set.empty
-    result <- routeMessage ds (mkEnvelope (MsgPlugRegister info))
-    result `shouldBe` Just (MsgPlugRegistered (PlugId nil))
+    result <- routeMessage ds stdin (mkEnvelope (MsgPlugRegister info))
+    result `shouldBe` [Reply (MsgPlugRegistered (PlugId nil))]
+    plugs <- atomically $ readTVar (dsPlugs ds)
+    Map.member (PlugId nil) plugs `shouldBe` True
 
-  it "handles MsgCellCreate" $ do
+  it "handles MsgCellCreate with PTY owner" $ do
     ds <- newDaemonState
     let cid = CellId nil
-    result <- routeMessage ds (mkEnvelope (MsgCellCreate cid "/tmp"))
-    result `shouldBe` Nothing  -- fire-and-forget
-    -- Verify cell was created
-    cells <- atomically $ readTVar (dsCells ds)
-    Map.member cid cells `shouldBe` True
+    result <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    result `shouldBe` []
+    mcell <- atomically $ getCell ds cid
+    case mcell of
+      Nothing -> expectationFailure "cell not found"
+      Just cell -> cellPtyOwner cell `shouldBe` Just (PlugId nil)
 
   it "handles MsgCellDestroy" $ do
     ds <- newDaemonState
     let cid = CellId nil
-    _ <- routeMessage ds (mkEnvelope (MsgCellCreate cid "/tmp"))
-    _ <- routeMessage ds (mkEnvelope (MsgCellDestroy cid))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellDestroy cid))
     cells <- atomically $ readTVar (dsCells ds)
     Map.member cid cells `shouldBe` False
 
@@ -49,8 +53,8 @@ spec = describe "Router" $ do
     ds <- newDaemonState
     let cid = CellId nil
         pid = PlugId nil
-    _ <- routeMessage ds (mkEnvelope (MsgCellCreate cid "/tmp"))
-    _ <- routeMessage ds (mkEnvelope (MsgCellAttach cid pid))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellAttach cid pid))
     mcell <- atomically $ getCell ds cid
     case mcell of
       Nothing -> expectationFailure "cell not found"
@@ -60,9 +64,9 @@ spec = describe "Router" $ do
     ds <- newDaemonState
     let cid = CellId nil
         pid = PlugId nil
-    _ <- routeMessage ds (mkEnvelope (MsgCellCreate cid "/tmp"))
-    _ <- routeMessage ds (mkEnvelope (MsgCellAttach cid pid))
-    _ <- routeMessage ds (mkEnvelope (MsgCellDetach cid pid))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellAttach cid pid))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellDetach cid pid))
     mcell <- atomically $ getCell ds cid
     case mcell of
       Nothing -> expectationFailure "cell not found"
@@ -71,18 +75,38 @@ spec = describe "Router" $ do
   it "lists cells after creating" $ do
     ds <- newDaemonState
     let cid = CellId nil
-    _ <- routeMessage ds (mkEnvelope (MsgCellCreate cid "/tmp"))
-    result <- routeMessage ds (mkEnvelope MsgListCells)
-    result `shouldBe` Just (MsgListCellsResponse [(cid, "/tmp")])
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    result <- routeMessage ds stdin (mkEnvelope MsgListCells)
+    result `shouldBe` [Reply (MsgListCellsResponse [(cid, "/tmp")])]
 
   it "handles MsgPlugDeregister and cleans up cells" $ do
     ds <- newDaemonState
     let cid = CellId nil
         pid = PlugId nil
-    _ <- routeMessage ds (mkEnvelope (MsgCellCreate cid "/tmp"))
-    _ <- routeMessage ds (mkEnvelope (MsgCellAttach cid pid))
-    _ <- routeMessage ds (mkEnvelope (MsgPlugDeregister pid))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellAttach cid pid))
+    _ <- routeMessage ds stdin (mkEnvelope (MsgPlugDeregister pid))
     mcell <- atomically $ getCell ds cid
     case mcell of
       Nothing -> expectationFailure "cell not found"
       Just cell -> Set.member pid (cellPlugs cell) `shouldBe` False
+
+  it "routes MsgInput to PTY owner" $ do
+    ds <- newDaemonState
+    let cid = CellId nil
+        pid = PlugId nil
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    result <- routeMessage ds stdin (mkEnvelope (MsgInput cid "hello"))
+    result `shouldBe` [SendTo pid (MsgInput cid "hello")]
+
+  it "routes MsgOutput as broadcast" $ do
+    ds <- newDaemonState
+    let cid = CellId nil
+    result <- routeMessage ds stdin (mkEnvelope (MsgOutput cid "data"))
+    result `shouldBe` [Broadcast cid (MsgOutput cid "data")]
+
+  it "returns empty for MsgInput to nonexistent cell" $ do
+    ds <- newDaemonState
+    let cid = CellId nil
+    result <- routeMessage ds stdin (mkEnvelope (MsgInput cid "hello"))
+    result `shouldBe` []

@@ -1,11 +1,14 @@
+{-# LANGUAGE LambdaCase #-}
 module Tank.Daemon.Router
-  ( routeMessage
+  ( RouteAction(..)
+  , routeMessage
   ) where
 
 import Control.Concurrent.STM
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.UUID (nil)
+import System.IO (Handle)
 
 import Tank.Core.CRDT (ReplicaId(..))
 import Tank.Core.Types
@@ -13,27 +16,30 @@ import Tank.Core.Protocol
 import Tank.Daemon.State
 import Tank.Terminal.Grid (mkGrid)
 
--- | Route an incoming message to the appropriate handler.
--- Returns 'Just response' for messages that need a reply,
--- 'Nothing' for fire-and-forget messages.
-routeMessage :: DaemonState -> MessageEnvelope -> IO (Maybe Message)
-routeMessage ds envelope = case mePayload envelope of
+-- | Routing decisions returned by the router.
+data RouteAction
+  = Reply Message              -- ^ Respond to the sender
+  | SendTo PlugId Message      -- ^ Send to a specific plug
+  | Broadcast CellId Message   -- ^ Send to all plugs attached to a cell
+  deriving (Eq, Show)
+
+-- | Route an incoming message. Returns a list of actions for the caller to dispatch.
+routeMessage :: DaemonState -> Handle -> MessageEnvelope -> IO [RouteAction]
+routeMessage ds handle envelope = case mePayload envelope of
 
   -- Plug lifecycle
   MsgPlugRegister info -> do
-    -- NOTE: We can't store the PlugConn here because routeMessage doesn't
-    -- have access to the client Handle. The handle linkage will be added
-    -- in Main.hs where the Handle is available.
-    pure $ Just $ MsgPlugRegistered (piId info)
+    let conn = PlugConn info handle
+    atomically $ addPlug ds conn
+    pure [Reply (MsgPlugRegistered (piId info))]
 
   MsgPlugDeregister pid -> do
     atomically $ do
       removePlug ds pid
-      -- Detach from all cells
       cells <- readTVar (dsCells ds)
       let cells' = Map.map (\c -> c { cellPlugs = Set.delete pid (cellPlugs c) }) cells
       writeTVar (dsCells ds) cells'
-    pure Nothing
+    pure []
 
   -- Cell lifecycle
   MsgCellCreate cid dir -> do
@@ -42,50 +48,54 @@ routeMessage ds envelope = case mePayload envelope of
           , cellDirectory = dir
           , cellEnv = Map.empty
           , cellPlugs = Set.empty
-          , cellPtyOwner = Nothing
+          , cellPtyOwner = Just (meSource envelope)
           , cellGrid = mkGrid (ReplicaId nil) 80 24 100 10
           }
     atomically $ addCell ds cell
-    pure Nothing
+    pure []
 
   MsgCellDestroy cid -> do
     atomically $ removeCell ds cid
-    pure Nothing
+    pure []
 
   MsgCellAttach cid pid -> do
     atomically $ do
       mcell <- getCell ds cid
       case mcell of
         Nothing -> pure ()
-        Just cell -> do
-          let cell' = cell { cellPlugs = Set.insert pid (cellPlugs cell) }
-          addCell ds cell'
-    pure Nothing
+        Just cell -> addCell ds cell { cellPlugs = Set.insert pid (cellPlugs cell) }
+    pure []
 
   MsgCellDetach cid pid -> do
     atomically $ do
       mcell <- getCell ds cid
       case mcell of
         Nothing -> pure ()
-        Just cell -> do
-          let cell' = cell { cellPlugs = Set.delete pid (cellPlugs cell) }
-          addCell ds cell'
-    pure Nothing
+        Just cell -> addCell ds cell { cellPlugs = Set.delete pid (cellPlugs cell) }
+    pure []
 
   -- Queries
   MsgListCells -> do
     cells <- atomically $ listCells ds
-    pure $ Just $ MsgListCellsResponse cells
+    pure [Reply (MsgListCellsResponse cells)]
 
-  -- I/O routing (forward to attached plugs — needs broadcast mechanism, stub for now)
-  MsgInput _cid _bytes -> pure Nothing
-  MsgOutput _cid _bytes -> pure Nothing
+  -- I/O routing
+  MsgInput cid bytes -> do
+    mcell <- atomically $ getCell ds cid
+    case mcell of
+      Nothing -> pure []
+      Just cell -> case cellPtyOwner cell of
+        Nothing -> pure []
+        Just owner -> pure [SendTo owner (MsgInput cid bytes)]
 
-  -- State sync (deferred to Phase 4)
-  MsgStateUpdate _cid _delta -> pure Nothing
+  MsgOutput cid bytes -> do
+    pure [Broadcast cid (MsgOutput cid bytes)]
 
-  -- Response messages shouldn't arrive at router, ignore them
-  MsgPlugRegistered _ -> pure Nothing
-  MsgListCellsResponse _ -> pure Nothing
-  MsgFetchLines {} -> pure Nothing
-  MsgFetchLinesResponse _ _ -> pure Nothing
+  -- State sync (deferred)
+  MsgStateUpdate _cid _delta -> pure []
+
+  -- Response messages shouldn't arrive at router
+  MsgPlugRegistered _ -> pure []
+  MsgListCellsResponse _ -> pure []
+  MsgFetchLines {} -> pure []
+  MsgFetchLinesResponse _ _ -> pure []
