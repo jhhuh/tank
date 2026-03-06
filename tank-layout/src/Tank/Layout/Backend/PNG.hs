@@ -96,7 +96,7 @@ renderMultiPNG config frames = do
 
   let chrome = if pngTitleBar config then titleBarHeight else 0
       pad = pngPadding config
-      gapBetween = 16 :: Int  -- pixels between frames
+      gapBetween = 40 :: Int  -- pixels between frames (room for arrow)
 
       -- Per-frame window dimensions
       winDims = map (\(_, g) ->
@@ -121,13 +121,31 @@ renderMultiPNG config frames = do
       setRGB bodyRGB
       paint
 
-      -- Draw each frame
+      -- Draw each frame with arrows between them
       let go _ [] = pure ()
           go yOff ((title_, grid):rest) = do
             let wx = fromIntegral pad
                 wy = fromIntegral yOff
             drawFrame config fontSize cellW cellH asc wx wy grid title_
             let winH = gridHeight grid * cellH + chrome + innerPadTop + innerPadBottom
+            -- Draw arrow to next frame if there is one
+            when (not (null rest)) $ do
+              let ax = fromIntegral imgW / 2  -- center horizontally
+                  arrowTop = wy + fromIntegral winH + 8
+                  arrowMid = wy + fromIntegral winH + fromIntegral gapBetween / 2
+                  arrowTip = arrowMid + 7
+              setRGB borderRGB
+              setLineWidth 2
+              moveTo ax arrowTop
+              lineTo ax (arrowMid + 4)
+              stroke
+              -- Arrowhead triangle
+              newPath
+              moveTo (ax - 6) (arrowMid + 4)
+              lineTo (ax + 6) (arrowMid + 4)
+              lineTo ax arrowTip
+              closePath
+              fill
             go (yOff + winH + gapBetween) rest
       go pad frames
 
