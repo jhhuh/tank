@@ -3,7 +3,7 @@ module Tank.Layout.Backend.ANSI
   ) where
 
 import Data.ByteString (ByteString)
-import Data.ByteString.Builder (Builder, toLazyByteString, char7, string7)
+import Data.ByteString.Builder (Builder, toLazyByteString, charUtf8, string7)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Word (Word8)
 import qualified Data.Vector as V
@@ -23,7 +23,7 @@ renderRow row =
 
 renderCell :: Cell -> Builder
 renderCell (Cell ch fg bg bold dim) =
-  sgrFg fg <> sgrBg bg <> sgrBold bold <> sgrDim dim <> char7 ch
+  sgrFg fg <> sgrBg bg <> sgrBold bold <> sgrDim dim <> charUtf8 ch
 
 sgrFg :: Color -> Builder
 sgrFg Default = string7 "\ESC[39m"
