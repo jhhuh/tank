@@ -90,6 +90,7 @@ test-suite tank-tests
   other-modules:
     Tank.Core.CRDTSpec
     Tank.Core.WireSpec
+    Tank.Daemon.SocketSpec
     Tank.Terminal.EmulatorSpec
     Tank.Terminal.GridSpec
     Tank.Plug.Operator.ToolsSpec
@@ -107,6 +108,7 @@ test-suite tank-tests
     , unix         >= 2.7  && < 3
     , uuid         >= 1.3  && < 2
     , QuickCheck   >= 2.14 && < 3
+    , network      >= 3.1  && < 4
     , temporary    >= 1.3  && < 2
     , text         >= 2.0  && < 3
     , filepath     >= 1.4  && < 2
