@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Tank.Daemon.Main
   ( startDaemon
   , startDaemonAt
@@ -6,8 +7,11 @@ module Tank.Daemon.Main
   ) where
 
 import Control.Concurrent (forkFinally)
-import Control.Exception (bracket)
+import Control.Concurrent.STM (atomically)
+import Control.Exception (bracket, IOException, try)
+import Control.Monad (forM_)
 import Data.UUID (nil)
+import qualified Data.Set as Set
 import Network.Socket (Socket, accept, close)
 import System.Directory (removeFile)
 import System.IO (Handle, hClose, hPutStrLn, stderr)
@@ -15,7 +19,7 @@ import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
 import Tank.Core.Types (PlugId(..))
 import Tank.Daemon.Router (RouteAction(..), routeMessage)
 import Tank.Daemon.Socket (listenSocket, socketPath, socketHandle, readEnvelope, writeEnvelope)
-import Tank.Daemon.State (DaemonState, newDaemonState)
+import Tank.Daemon.State (DaemonState, PlugConn(..), newDaemonState, lookupPlug, getCellPlugs)
 
 -- | Start the tank daemon
 startDaemon :: String -> IO ()
@@ -53,11 +57,34 @@ handleClient state h = do
     Left _err -> pure ()  -- EOF or parse error, exit loop (forkFinally will cleanup)
     Right envelope -> do
       actions <- routeMessage state h envelope
-      mapM_ (\case
-        Reply respMsg -> writeEnvelope h (makeResponse envelope respMsg)
-        _ -> pure ()  -- SendTo/Broadcast handled in Task 3
-        ) actions
-      handleClient state h  -- loop
+      dispatchActions state h envelope actions
+      handleClient state h
+
+-- | Dispatch routing actions to the appropriate handles.
+dispatchActions :: DaemonState -> Handle -> MessageEnvelope -> [RouteAction] -> IO ()
+dispatchActions ds senderH req actions = forM_ actions $ \case
+  Reply msg ->
+    writeEnvelope senderH (makeResponse req msg)
+  SendTo pid msg -> do
+    mconn <- atomically $ lookupPlug ds pid
+    case mconn of
+      Just conn -> safeSend (pcHandle conn) (makeResponse req msg)
+      Nothing -> pure ()
+  Broadcast cid msg -> do
+    plugIds <- atomically $ getCellPlugs ds cid
+    forM_ (Set.toList plugIds) $ \pid -> do
+      mconn <- atomically $ lookupPlug ds pid
+      case mconn of
+        Just conn -> safeSend (pcHandle conn) (makeResponse req msg)
+        Nothing -> pure ()
+
+-- | Write envelope, silently ignoring write errors (plug may have disconnected).
+safeSend :: Handle -> MessageEnvelope -> IO ()
+safeSend h env = do
+  result <- try (writeEnvelope h env)
+  case result of
+    Left (_ :: IOException) -> pure ()
+    Right () -> pure ()
 
 -- | Build a response envelope from request envelope + response payload
 makeResponse :: MessageEnvelope -> Message -> MessageEnvelope
