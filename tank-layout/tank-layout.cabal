@@ -17,6 +17,7 @@ library
     Tank.Layout
     Tank.Layout.Cell
     Tank.Layout.DSL
+    Tank.Layout.Render
     Tank.Layout.Types
   build-depends:
     , base        >= 4.17 && < 5
@@ -40,6 +41,7 @@ test-suite tank-layout-tests
   other-modules:
     Tank.Layout.CellSpec
     Tank.Layout.DSLSpec
+    Tank.Layout.RenderSpec
     Tank.Layout.TypesSpec
   hs-source-dirs:   test
   default-language: GHC2021
