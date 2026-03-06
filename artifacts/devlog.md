@@ -135,3 +135,35 @@ Rasterific (vector graphics rasterization to JuicyPixels images).
 - Rounded corner clipping/masking on the window frame
 - Bold/dim style modifiers in the PNG output
 - Actual visual verification (test is `pendingWith` — needs TTF font at runtime)
+
+---
+
+## 2026-03-06 — Task 8: Concept image reproduction
+
+**Goal:** Port the 9 concept scenarios from render-concepts.py to the Haskell eDSL.
+
+**Render.hs fixes (prerequisites):**
+1. `stampContent` for `Text` spans was losing all per-span styling. `spansToLines`
+   concatenated all text into plain `Text`, then `stampLine` stamped with `Default`
+   colors. Replaced with `stampSpans` that iterates character-by-character through
+   spans, preserving fg color, bold, and dim from each `SpanStyle`.
+2. `drawBorder` only rendered the left title. Added right hint title rendering
+   (positioned at `rx + rw - 2 - hintLen`).
+
+**Approach:**
+- Span helpers: `s` (plain), `c` (colored), `b` (bold+color), `d` (dim+color)
+- Layout helpers: `padLine`, `padTo`, `padInner`, `statusBar`, `interiorSep`
+- Each scenario is a `Layout` value built with eDSL combinators
+- Overlays use `Styled` with `Border Rounded blue` for the box, interior separators
+  are horizontal line characters rendered as colored span content
+- Scenario 09 (detach) stacks 3 grids vertically with gap rows between them
+
+**All 9 scenarios generate successfully:**
+01-idle, 02-overlay, 03-tool-exec, 04-multi-pane, 05-multi-agent,
+06-windows, 07-services, 08-services-logs, 09-detach
+
+**Remaining rough edges:**
+- Scenario 09 renders as one tall window frame (no per-frame chrome or arrows)
+- No background color support on status bar spans (barBg is approximated via styled text)
+- Interior separator lines are content-based (horizontal line chars), not true box separators
+- Bold/dim not visually distinct in PNG output (PNG backend doesn't vary font weight yet)
