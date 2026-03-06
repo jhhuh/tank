@@ -37,14 +37,14 @@ splitRect Horizontal ratio (Rect x y w h)
       let w1 = w - 1
       in (Rect x y w1 h, Rect (x + w1) y 1 h)
   | otherwise =
-      let w1 = floor (fromIntegral w * ratio)
+      let w1 = round (fromIntegral w * ratio)
       in (Rect x y w1 h, Rect (x + w1) y (w - w1) h)
 splitRect Vertical ratio (Rect x y w h)
   | ratio < 0 =
       let h1 = h - 1
       in (Rect x y w h1, Rect x (y + h1) w 1)
   | otherwise =
-      let h1 = floor (fromIntegral h * ratio)
+      let h1 = round (fromIntegral h * ratio)
       in (Rect x y w h1, Rect x (y + h1) w (h - h1))
 
 -- | Compute the rect for an overlay given its anchor and parent rect.
