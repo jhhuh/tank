@@ -108,3 +108,30 @@ Proposed architecture for `tank-render` (independent cabal package):
 
 This package would serve both tank's documentation and its actual UI renderer,
 ensuring the concept images exactly match the real product.
+
+## 2026-03-06 — Task 7: PNG rendering backend
+
+Added `Tank.Layout.Backend.PNG` module that renders `CellGrid` to PNG images
+using JuicyPixels (image encoding), FontyFruity (font loading/metrics), and
+Rasterific (vector graphics rasterization to JuicyPixels images).
+
+**Architecture decisions:**
+- Rasterific's `renderDrawing` produces `Image PixelRGBA8` directly, which
+  JuicyPixels `encodePng` serializes. No intermediate bitmap manipulation needed.
+- Font metrics via `stringBoundingBox` on "M" character determine monospace
+  cell dimensions (same approach as the Python renderer).
+- `printTextAt` from Rasterific handles glyph rasterization — FontyFruity alone
+  only loads fonts, it doesn't render glyphs to pixels.
+
+**What's implemented:**
+- `renderPNG :: PNGConfig -> CellGrid -> IO LBS.ByteString` — full pipeline
+- Window chrome: title bar, traffic light dots, rounded corners, centered title
+- Tokyo Night palette matching render-concepts.py constants
+- Per-cell background fill + foreground character rendering
+- Configurable: font path, font size, title bar toggle, padding
+
+**What's deferred (Task 8):**
+- Box-drawing character special rendering (lines instead of font glyphs)
+- Rounded corner clipping/masking on the window frame
+- Bold/dim style modifiers in the PNG output
+- Actual visual verification (test is `pendingWith` — needs TTF font at runtime)
