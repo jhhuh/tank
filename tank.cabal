@@ -96,6 +96,7 @@ test-suite tank-tests
     Tank.Plug.Operator.ToolsSpec
     Tank.Plug.TerminalSpec
     Tank.Terminal.CellAdapterSpec
+    Tank.Daemon.IntegrationSpec
     Tank.Daemon.RouterSpec
   build-depends:
     , base         >= 4.17 && < 5
