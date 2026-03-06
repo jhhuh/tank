@@ -29,7 +29,7 @@ data PlugInfo = PlugInfo
   { piId           :: !PlugId
   , piName         :: !Text
   , piCapabilities :: !(Set PlugCapability)
-  } deriving (Show)
+  } deriving (Eq, Show)
 
 data Cell = Cell
   { cellId        :: !CellId

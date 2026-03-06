@@ -20,6 +20,7 @@ library
     Tank.Core.CRDT
     Tank.Core.Types
     Tank.Core.Protocol
+    Tank.Core.Wire
     Tank.Daemon.Main
     Tank.Daemon.Socket
     Tank.Daemon.Router
@@ -88,6 +89,7 @@ test-suite tank-tests
   main-is:          Spec.hs
   other-modules:
     Tank.Core.CRDTSpec
+    Tank.Core.WireSpec
     Tank.Terminal.EmulatorSpec
     Tank.Terminal.GridSpec
     Tank.Plug.Operator.ToolsSpec

@@ -21,7 +21,7 @@ data MessageEnvelope = MessageEnvelope
   , meTarget    :: !Target
   , meSequence  :: !Word64  -- Lamport clock
   , mePayload   :: !Message
-  } deriving (Show)
+  } deriving (Eq, Show)
 
 data Message
   = MsgPlugRegister !PlugInfo
@@ -38,4 +38,4 @@ data Message
   | MsgListCellsResponse ![(CellId, FilePath)]
   | MsgInput !CellId !ByteString  -- keyboard input to forward to PTY
   | MsgOutput !CellId !ByteString  -- PTY output
-  deriving (Show)
+  deriving (Eq, Show)
