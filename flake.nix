@@ -25,7 +25,6 @@
           ps.mkdocs
         ]);
 
-        conceptEnv = pkgs.python3.withPackages (ps: [ ps.pillow ]);
         conceptFont = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSansMono.ttf";
       in
       {
@@ -38,11 +37,10 @@
             mkdocs build -d $out
           '';
           concept-images = pkgs.runCommand "tank-concept-images" {
-            nativeBuildInputs = [ conceptEnv ];
+            nativeBuildInputs = [ haskellPackages.tank-layout ];
           } ''
             mkdir -p $out
-            ${conceptEnv}/bin/python3 \
-              ${./docs-site/docs/assets/concepts/render-concepts.py} all \
+            tank-render-concepts all \
               --font ${conceptFont} --outdir $out
           '';
         };

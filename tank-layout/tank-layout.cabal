@@ -3,7 +3,7 @@ name:            tank-layout
 version:         0.1.0.0
 synopsis:        Declarative terminal layout language with ANSI and PNG backends
 license:         MIT
-license-file:    ../LICENSE
+license-file:    LICENSE
 author:          jhhuh
 build-type:      Simple
 
