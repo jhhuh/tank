@@ -165,7 +165,11 @@ stampContent :: CellGrid -> Rect -> Content -> CellGrid
 stampContent grid (Rect rx ry rw rh) (Text spans_) =
   stampSpans grid rx ry rw rh spans_
 stampContent grid (Rect rx ry rw rh) (Fill ch fg) =
-  fillRect grid (Rect rx ry rw rh) ch fg Default
+  foldl (\g (col, row) ->
+    let existBg = cellBg (getCell g col row)
+    in setCell g col row (Cell ch fg existBg False False))
+    grid
+    [(c_, r_) | r_ <- [ry .. ry + rh - 1], c_ <- [rx .. rx + rw - 1]]
 stampContent grid (Rect rx ry rw rh) (CellContent src) =
   let sw = gridWidth src
       sh = gridHeight src
@@ -195,9 +199,10 @@ stampSpans grid startX startY maxW maxH spans_ =
         | ch == '\n'  = (g, 0, row + 1)
         | col >= maxW = (g, col + 1, row)  -- clip but keep scanning
         | otherwise   =
-            ( setCell g (startX + col) (startY + row)
-                (Cell ch fg Default bold dim_)
-            , col + 1, row)
+            let existBg = cellBg (getCell g (startX + col) (startY + row))
+            in ( setCell g (startX + col) (startY + row)
+                    (Cell ch fg existBg bold dim_)
+               , col + 1, row)
   in go grid 0 0 spans_
 
 -- | Convert a list of spans into lines, splitting on newlines.
