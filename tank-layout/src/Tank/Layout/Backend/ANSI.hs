@@ -35,13 +35,15 @@ renderRow prev row = V.foldl' step (prev, mempty) row
 -- | Emit only the SGR codes that differ from the previous cell.
 -- 'Nothing' means no previous cell — emit all attributes.
 diffSGR :: Prev -> Cell -> Builder
-diffSGR Nothing (Cell _ fg bg bold dim) =
-  sgrFg fg <> sgrBg bg <> sgrBold bold <> sgrDim dim
+diffSGR Nothing (Cell _ fg bg bold dim_) =
+  sgrFg fg <> sgrBg bg <> sgrIntensity bold dim_
 diffSGR (Just (Cell _ pfg pbg pbold pdim)) (Cell _ fg bg bold dim) =
   (if fg   /= pfg   then sgrFg fg     else mempty) <>
   (if bg   /= pbg   then sgrBg bg     else mempty) <>
-  (if bold /= pbold then sgrBold bold else mempty) <>
-  (if dim  /= pdim  then sgrDim dim   else mempty)
+  -- Bold and dim share SGR 22 for reset, so treat them as a unit
+  (if bold /= pbold || dim /= pdim
+     then sgrIntensity bold dim
+     else mempty)
 
 sgrFg :: Color -> Builder
 sgrFg Default = string7 "\ESC[39m"
@@ -57,7 +59,15 @@ sgrBold False = string7 "\ESC[22m"
 
 sgrDim :: Bool -> Builder
 sgrDim True  = string7 "\ESC[2m"
-sgrDim False = mempty
+sgrDim False = string7 "\ESC[22m"
+
+-- | Emit intensity attributes as a unit. SGR 22 resets both bold and dim,
+-- so when either changes we must reset and re-assert both.
+sgrIntensity :: Bool -> Bool -> Builder
+sgrIntensity bold dim_ =
+  string7 "\ESC[22m" <>
+  (if bold then string7 "\ESC[1m" else mempty) <>
+  (if dim_ then string7 "\ESC[2m" else mempty)
 
 w8 :: Word8 -> Builder
 w8 = string7 . show
