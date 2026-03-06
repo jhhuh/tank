@@ -1,7 +1,7 @@
 packages: . tank-layout/
 
 package tank
-  tests: False
+  tests: True
 
 package tank-layout
   tests: True

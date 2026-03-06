@@ -28,6 +28,7 @@ library
     Tank.Plug.Operator
     Tank.Plug.Operator.Overlay
     Tank.Plug.Operator.Tools
+    Tank.Terminal.CellAdapter
     Tank.Terminal.Emulator
     Tank.Terminal.Grid
   build-depends:
@@ -86,9 +87,11 @@ test-suite tank-tests
     Tank.Terminal.GridSpec
     Tank.Plug.Operator.ToolsSpec
     Tank.Plug.TerminalSpec
+    Tank.Terminal.CellAdapterSpec
   build-depends:
     , base         >= 4.17 && < 5
     , tank
+    , tank-layout
     , hspec        >= 2.10 && < 3
     , bytestring   >= 0.11 && < 1
     , containers   >= 0.6  && < 1
@@ -103,4 +106,4 @@ test-suite tank-tests
     , vector       >= 0.13 && < 1
   hs-source-dirs:   tests
   default-language: GHC2021
-  build-tool-depends: hspec-discover:hspec-discover
+  -- hspec-discover provided by nix devShell PATH
