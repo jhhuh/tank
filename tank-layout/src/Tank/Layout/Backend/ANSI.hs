@@ -9,21 +9,39 @@ import Data.Word (Word8)
 import qualified Data.Vector as V
 import Tank.Layout.Cell
 
+-- | Previous cell attributes for delta-encoding. 'Nothing' forces full SGR
+-- emission on the first cell.
+type Prev = Maybe Cell
+
 renderANSI :: CellGrid -> ByteString
 renderANSI (CellGrid rows) =
   LBS.toStrict $ toLazyByteString $
-    V.ifoldl' (\b rowIdx row ->
-      b <> renderRow row <> (if rowIdx < V.length rows - 1 then string7 "\n" else mempty)
-    ) mempty rows
+    snd (V.ifoldl' foldRow (Nothing, mempty) rows)
     <> string7 "\ESC[0m"
+  where
+    foldRow :: (Prev, Builder) -> Int -> V.Vector Cell -> (Prev, Builder)
+    foldRow (prev, b) rowIdx row =
+      let nl = if rowIdx < V.length rows - 1 then string7 "\n" else mempty
+          (prev', rb) = renderRow prev row
+      in (prev', b <> rb <> nl)
 
-renderRow :: V.Vector Cell -> Builder
-renderRow row =
-  V.foldl' (\b cell -> b <> renderCell cell) mempty row
+renderRow :: Prev -> V.Vector Cell -> (Prev, Builder)
+renderRow prev row = V.foldl' step (prev, mempty) row
+  where
+    step (p, b) cell =
+      let sgr = diffSGR p cell
+      in (Just cell, b <> sgr <> charUtf8 (cellChar cell))
 
-renderCell :: Cell -> Builder
-renderCell (Cell ch fg bg bold dim) =
-  sgrFg fg <> sgrBg bg <> sgrBold bold <> sgrDim dim <> charUtf8 ch
+-- | Emit only the SGR codes that differ from the previous cell.
+-- 'Nothing' means no previous cell — emit all attributes.
+diffSGR :: Prev -> Cell -> Builder
+diffSGR Nothing (Cell _ fg bg bold dim) =
+  sgrFg fg <> sgrBg bg <> sgrBold bold <> sgrDim dim
+diffSGR (Just (Cell _ pfg pbg pbold pdim)) (Cell _ fg bg bold dim) =
+  (if fg   /= pfg   then sgrFg fg     else mempty) <>
+  (if bg   /= pbg   then sgrBg bg     else mempty) <>
+  (if bold /= pbold then sgrBold bold else mempty) <>
+  (if dim  /= pdim  then sgrDim dim   else mempty)
 
 sgrFg :: Color -> Builder
 sgrFg Default = string7 "\ESC[39m"

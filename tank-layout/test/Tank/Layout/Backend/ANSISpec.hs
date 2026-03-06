@@ -31,3 +31,25 @@ spec = do
           bs = renderANSI grid
       -- Should contain foreground color SGR
       B8.unpack bs `shouldContain` "\ESC[38;2;255;0;0m"
+
+    it "does not emit redundant SGR for identical adjacent cells" $ do
+      -- 3 red cells in a row: only the first should get the color SGR
+      let cell = Cell 'A' (RGB 255 0 0) Default False False
+          grid = setCell (setCell (setCell (mkGrid 3 1) 0 0 cell) 1 0 cell) 2 0 cell
+          s = B8.unpack (renderANSI grid)
+          -- Count occurrences of the red foreground SGR
+          redSgr = "\ESC[38;2;255;0;0m"
+          count _ [] = 0
+          count needle hay@(_:rest)
+            | take (length needle) hay == needle = 1 + count needle (drop (length needle) hay)
+            | otherwise = count needle rest
+      count redSgr s `shouldBe` (1 :: Int)
+
+    it "emits new SGR when color changes between cells" $ do
+      -- First cell red, second cell green: both color SGRs must appear
+      let red   = Cell 'R' (RGB 255 0 0) Default False False
+          green = Cell 'G' (RGB 0 255 0) Default False False
+          grid  = setCell (setCell (mkGrid 2 1) 0 0 red) 1 0 green
+          s = B8.unpack (renderANSI grid)
+      s `shouldContain` "\ESC[38;2;255;0;0m"
+      s `shouldContain` "\ESC[38;2;0;255;0m"
