@@ -200,3 +200,38 @@ management (split/remove/resize/cycle). tank-layout is for rendering content.
 
 **Verification:** `cabal build all` succeeds with no warnings. All 23 tank-layout tests pass.
 Tank tests are disabled in cabal.project and don't reference changed types.
+
+## 2026-03-06 — Task 68: Migrate pane rendering to tank-layout
+
+**Goal:** Replace imperative `renderPaneLayout` in Terminal.hs with a two-phase pipeline:
+build tank-layout tree → render to CellGrid → emit via ANSI backend.
+
+**Key discovery:** `gridToCellGrid` in CellAdapter converts from the CRDT Grid type
+(absolute-line-addressed, epoch-tagged cells), NOT from VTerm (which uses a simple
+`V.Vector (V.Vector Cell)` with Emulator-specific Color/Attrs types). Needed a new
+`vtermToCellGrid :: VTerm -> CellGrid` that uses the VTerm public API (`vtGetCell`,
+`vtGetSize`) and converts Emulator's `Color256 Word8` to layout's `RGB Word8 Word8 Word8`
+via the existing `ansi256ToRGB` palette.
+
+**Direction mapping:**
+- `PVertical` (splits columns, left|right panes) → tank-layout `Horizontal` (splits width)
+- `PHorizontal` (splits rows, top|bottom panes) → tank-layout `Vertical` (splits height)
+
+**Border strategy:** Overdraw. The layout tree is built WITHOUT border space (just pane
+content via Split with the stored ratio). After emitting the grid, `drawPaneBorders`
+overwrites the split positions with box-drawing characters (│ for vertical, ─ for horizontal),
+preserving the active-pane green/dim color highlighting from the old code.
+
+**Changes:**
+- `src/Tank/Terminal/CellAdapter.hs`: Added `vtermToCellGrid`, `convertEmulatorCell`,
+  `convertEmulatorColor` — converts VTerm screen to tank-layout CellGrid
+- `src/Tank/Plug/Terminal.hs`:
+  - New imports: CellAdapter, Layout.Render, Layout.Cell, Layout.Types, Backend.ANSI
+  - `buildLayout` — converts PaneLayout tree → tank-layout Layout tree (IO, reads VTerms)
+  - `emitGrid` — emits CellGrid to stdout, one row per line with cursor positioning
+  - `drawPaneBorders` — recursive border overdraw with active-pane highlighting
+  - `renderAllPanes` — now uses buildLayout → renderLayout → emitGrid → drawPaneBorders
+  - Removed dead `renderPaneLayout` (replaced by the new pipeline)
+  - Kept `renderSinglePane`, `renderVTermAt`, `findPaneRegion` unchanged (incremental updates)
+
+**Verification:** `cabal build all` clean (no warnings). 57 tank tests + 42 tank-layout tests pass.
