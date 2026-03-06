@@ -16,6 +16,7 @@ library
   exposed-modules:
     Tank.Layout
     Tank.Layout.Cell
+    Tank.Layout.DSL
     Tank.Layout.Types
   build-depends:
     , base        >= 4.17 && < 5
@@ -38,6 +39,7 @@ test-suite tank-layout-tests
     , vector       >= 0.13 && < 1
   other-modules:
     Tank.Layout.CellSpec
+    Tank.Layout.DSLSpec
     Tank.Layout.TypesSpec
   hs-source-dirs:   test
   default-language: GHC2021
