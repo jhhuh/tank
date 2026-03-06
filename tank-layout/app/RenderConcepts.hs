@@ -99,25 +99,6 @@ prompt path = [c blue path, s " ", c green ">", s " "]
 defaultPrompt :: [Span]
 defaultPrompt = prompt "~/projects/webapp"
 
--- | Rounded bordered overlay with title
-overlayBox :: Text -> Text -> Int -> Int -> [[Span]] -> Layout
-overlayBox title_ hint boxW boxH contentLines =
-  let inner = boxW - 4  -- 2 for border, 2 for padding spaces
-      titleGap = max 0 (inner - T.length title_ - T.length hint)
-      titleLine = [b blue title_, s (T.replicate titleGap " "), d dim hint]
-      paddedContent = map (padInner inner) contentLines
-      -- total rows inside box: title(1) + sep(1) + content + sep(1) + input(1) = content + 4
-      contentRows = boxH - 6  -- top border, title, sep, ..., sep, input, bottom border
-      filledContent = take contentRows (paddedContent ++ repeat [s (T.replicate inner " ")])
-      inputLine = [padInner inner [d dim "> _"]]
-      allInner = [titleLine] ++ [sepLine inner] ++ filledContent ++ [sepLine inner] ++ inputLine
-      allSpans = concatMap (\l -> l ++ [nl]) (init allInner) ++ last allInner
-  in Styled defaultStyle
-       { sBorder = Just (Border Rounded blue)
-       , sTitle = Nothing
-       }
-       (spans allSpans)
-
 -- | Pad inner content of a box to given width
 padInner :: Int -> [Span] -> [Span]
 padInner w ss =
@@ -125,27 +106,32 @@ padInner w ss =
       gap = max 0 (w - len)
   in ss ++ [s (T.replicate gap " ")]
 
--- | Separator line for box interior
-sepLine :: Int -> [Span]
-sepLine _w = []  -- the border system handles horizontal lines via sep
+-- Box-drawing helpers (rounded corners, blue border)
+-- Builds boxes manually so interior separators (├───┤) connect to borders.
 
--- Wait, the Python uses box_sep which draws ├───┤ lines. In the eDSL we can't
--- easily do that inside content. Let me reconsider the approach.
--- Actually, looking at the Python more carefully, each overlay is built manually
--- with box_top, box_mid, box_sep, box_bot. In our eDSL, we have bordered/roundBordered
--- which adds a border automatically. The separators (├───┤) inside the content
--- would need to be content that draws those characters.
---
--- For the concept images, let me build the overlays using the Styled/border approach
--- for the outer box, and use horizontal line characters for internal separators.
+data BoxLine = BContent [Span] | BSep
 
--- | Horizontal separator characters for inside a box
-hline :: Int -> Text
-hline w = T.replicate w "\x2500"  -- ─
+-- | Wrap content lines in a rounded blue box with proper junction characters.
+wrapInBox :: Int -> [BoxLine] -> Layout
+wrapInBox boxW lines_ =
+  let inner = boxW - 4  -- 2 for border, 2 for padding spaces
+      renderLine (BContent ss) = boxMid boxW (padInner inner ss)
+      renderLine BSep          = boxSep boxW
+      allLines = [boxTop boxW] ++ map renderLine lines_ ++ [boxBot boxW]
+      allSpans = concatMap (\l -> l ++ [nl]) (init allLines) ++ last allLines
+  in spans allSpans
 
--- | Interior separator: full-width line of ─
-interiorSep :: Int -> [Span]
-interiorSep w = [c blue (hline w)]
+boxTop :: Int -> [Span]
+boxTop w = [c blue ("\x256D" <> T.replicate (w - 2) "\x2500" <> "\x256E")]
+
+boxBot :: Int -> [Span]
+boxBot w = [c blue ("\x2570" <> T.replicate (w - 2) "\x2500" <> "\x256F")]
+
+boxSep :: Int -> [Span]
+boxSep w = [c blue ("\x251C" <> T.replicate (w - 2) "\x2500" <> "\x2524")]
+
+boxMid :: Int -> [Span] -> [Span]
+boxMid _w content = [c blue "\x2502", s " "] ++ content ++ [s " ", c blue "\x2502"]
 
 -- ============================================================
 -- Scenario 01: Idle terminal
@@ -198,31 +184,25 @@ scenario02 =
       inner = overlayW - 4  -- inside border + 1 space each side
 
       titleGap = T.replicate (max 0 (inner - T.length "operator" - T.length "Esc: close")) " "
-      overlayContent =
-        [ [b blue "operator", s titleGap, d dim "Esc: close"]
-        , interiorSep inner
-        , [d dim "you"]
-        , [c fg "The timeout test is failing. Can you fix src/api/client.ts so it properly handles"]
-        , [c fg "timeout errors?"]
-        , []
-        , [c blue "agent"]
-        , [c fg "I'll take a look at the test and the client code."]
-        , []
-        , [c yellow "> read_file: src/api/client.test.ts"]
-        , [c green "  -> 42 lines read"]
-        , [c yellow "> read_file: src/api/client.ts"]
-        , [c purple "  ~ reading..."]
-        , interiorSep inner
-        , [d dim "> _"]
+      overlayBoxLines =
+        [ BContent [b blue "operator", s titleGap, d dim "Esc: close"]
+        , BSep
+        , BContent [d dim "you"]
+        , BContent [c fg "The timeout test is failing. Can you fix src/api/client.ts so it properly handles"]
+        , BContent [c fg "timeout errors?"]
+        , BContent []
+        , BContent [c blue "agent"]
+        , BContent [c fg "I'll take a look at the test and the client code."]
+        , BContent []
+        , BContent [c yellow "> read_file: src/api/client.test.ts"]
+        , BContent [c green "  -> 42 lines read"]
+        , BContent [c yellow "> read_file: src/api/client.ts"]
+        , BContent [c purple "  ~ reading..."]
+        , BSep
+        , BContent [d dim "> _"]
         ]
 
-      overlaySpans = concatMap (\l -> padInner inner l ++ [nl])
-                               (init overlayContent)
-                     ++ padInner inner (last overlayContent)
-
-      overlayLayout = Styled defaultStyle
-        { sBorder = Just (Border Rounded blue) }
-        (spans overlaySpans)
+      overlayLayout = wrapInBox overlayW overlayBoxLines
 
       -- Terminal content lines (padded to fill above overlay)
       totalTermLines = termH - 1 - overlayH  -- -1 for status bar
@@ -249,45 +229,34 @@ scenario03 =
 
       titleGap = T.replicate (max 0 (inner - T.length "operator" - T.length "Esc: close")) " "
 
-      contentLines =
-        [ [b blue "operator", s titleGap, d dim "Esc: close"]
-        , interiorSep inner
-        , [c yellow "> read_file: src/api/client.test.ts"]
-        , [c green "  -> 42 lines read"]
-        , []
-        , [c yellow "> read_file: src/api/client.ts"]
-        , [c green "  -> 87 lines read"]
-        , []
-        , [c blue "agent"]
-        , [c fg "The issue is in `fetchWithRetry`. The catch block doesn't distinguish timeout errors"]
-        , [c fg "from network errors. I'll add an AbortController timeout check."]
-        , []
-        , [c yellow "> write_file: src/api/client.ts"]
-        , [c green "  -> written (91 lines)"]
-        , []
-        , [c yellow "> execute: npm test"]
-        , [c green "  -> Tests: 3 passed, 3 total"]
-        , []
-        , [c blue "agent"]
-        , [c fg "Fixed! Added `AbortError` handling in the catch block. All 3 tests pass now."]
+      contentBoxLines =
+        [ BContent [b blue "operator", s titleGap, d dim "Esc: close"]
+        , BSep
+        , BContent [c yellow "> read_file: src/api/client.test.ts"]
+        , BContent [c green "  -> 42 lines read"]
+        , BContent []
+        , BContent [c yellow "> read_file: src/api/client.ts"]
+        , BContent [c green "  -> 87 lines read"]
+        , BContent []
+        , BContent [c blue "agent"]
+        , BContent [c fg "The issue is in `fetchWithRetry`. The catch block doesn't distinguish timeout errors"]
+        , BContent [c fg "from network errors. I'll add an AbortController timeout check."]
+        , BContent []
+        , BContent [c yellow "> write_file: src/api/client.ts"]
+        , BContent [c green "  -> written (91 lines)"]
+        , BContent []
+        , BContent [c yellow "> execute: npm test"]
+        , BContent [c green "  -> Tests: 3 passed, 3 total"]
+        , BContent []
+        , BContent [c blue "agent"]
+        , BContent [c fg "Fixed! Added `AbortError` handling in the catch block. All 3 tests pass now."]
         ]
 
-      -- pad to fill, leave room for sep+input+bottom = 3 lines inside border
-      availRows = termH - 1 - 2 - 3  -- -1 status, -2 top+title border area, -3 bottom area
-      paddedContent = take availRows (contentLines ++ repeat [])
+      -- pad to fill, leave room for sep+input at bottom
+      availRows = termH - 1 - 2 - 2  -- -1 status, -2 boxTop+boxBot, -2 BSep+input
+      paddedContent = take availRows (contentBoxLines ++ repeat (BContent []))
 
-      bottomLines =
-        [ interiorSep inner
-        , [d dim "> _"]
-        ]
-
-      allLines = paddedContent ++ bottomLines
-      overlaySpans = concatMap (\l -> padInner inner l ++ [nl]) (init allLines)
-                     ++ padInner inner (last allLines)
-
-      overlayLayout = Styled defaultStyle
-        { sBorder = Just (Border Rounded blue) }
-        (spans overlaySpans)
+      overlayLayout = wrapInBox termW (paddedContent ++ [BSep, BContent [d dim "> _"]])
 
       barLeft = [s " ", b green "tank", s " ", d dim "|", s " ", c blue "0:bash", s " ", d dim "|", s " ", c grey "~/projects/webapp"]
       barRight = [d dim "|", s " ", c green "done"]
@@ -404,51 +373,43 @@ scenario05 =
 
       -- Left overlay content
       lgap = T.replicate (max 0 (li - T.length "operator" - T.length "Esc")) " "
-      leftOverlayContent =
-        [ [b blue "operator", s lgap, d dim "Esc"]
-        , interiorSep li
-        , [s " ", d dim "you"]
-        , [s " ", c fg "Concurrent requests test"]
-        , [s " ", c fg "failing. Investigate?"]
-        , []
-        , [s " ", c yellow "> read_file: client.test.ts"]
-        , [s " ", c green "  -> 58 lines"]
-        , []
-        , [s " ", c blue "agent"]
-        , [s " ", c fg "AbortController is shared."]
-        , [s " ", c fg "Each call needs its own."]
+      leftOverlayBoxLines =
+        [ BContent [b blue "operator", s lgap, d dim "Esc"]
+        , BSep
+        , BContent [s " ", d dim "you"]
+        , BContent [s " ", c fg "Concurrent requests test"]
+        , BContent [s " ", c fg "failing. Investigate?"]
+        , BContent []
+        , BContent [s " ", c yellow "> read_file: client.test.ts"]
+        , BContent [s " ", c green "  -> 58 lines"]
+        , BContent []
+        , BContent [s " ", c blue "agent"]
+        , BContent [s " ", c fg "AbortController is shared."]
+        , BContent [s " ", c fg "Each call needs its own."]
+        , BSep
+        , BContent [s " ", d dim "> _"]
         ]
+      leftOverlay = wrapInBox lw leftOverlayBoxLines
 
       -- Right overlay content
       rgap = T.replicate (max 0 (ri - T.length "operator" - T.length "Esc")) " "
-      rightOverlayContent =
-        [ [b blue "operator", s rgap, d dim "Esc"]
-        , interiorSep ri
-        , [s " ", d dim "you"]
-        , [s " ", c fg "Review error handling in"]
-        , [s " ", c fg "the API client module."]
-        , []
-        , [s " ", c yellow "> read_file: client.ts"]
-        , [s " ", c green "  -> 93 lines"]
-        , []
-        , [s " ", c blue "agent"]
-        , [s " ", c fg "Retry logic looks solid."]
-        , [s " ", c fg "Adding exponential backoff."]
+      rightOverlayBoxLines =
+        [ BContent [b blue "operator", s rgap, d dim "Esc"]
+        , BSep
+        , BContent [s " ", d dim "you"]
+        , BContent [s " ", c fg "Review error handling in"]
+        , BContent [s " ", c fg "the API client module."]
+        , BContent []
+        , BContent [s " ", c yellow "> read_file: client.ts"]
+        , BContent [s " ", c green "  -> 93 lines"]
+        , BContent []
+        , BContent [s " ", c blue "agent"]
+        , BContent [s " ", c fg "Retry logic looks solid."]
+        , BContent [s " ", c fg "Adding exponential backoff."]
+        , BSep
+        , BContent [s " ", d dim "> _"]
         ]
-
-      -- Build left overlay (10 content rows + title + sep + sep + input = 14 inside)
-      contentRows = overlayH - 6  -- top, title, sep, ..., sep, input, bottom = 6 border rows
-      leftOvPadded = take contentRows (leftOverlayContent ++ repeat [])
-      leftOvBottom = [interiorSep li, [s " ", d dim "> _"]]
-      leftOvAll = leftOvPadded ++ leftOvBottom
-      leftOvSpans = concatMap (\l -> padInner li l ++ [nl]) (init leftOvAll) ++ padInner li (last leftOvAll)
-      leftOverlay = Styled defaultStyle { sBorder = Just (Border Rounded blue) } (spans leftOvSpans)
-
-      rightOvPadded = take contentRows (rightOverlayContent ++ repeat [])
-      rightOvBottom = [interiorSep ri, [s " ", d dim "> _"]]
-      rightOvAll = rightOvPadded ++ rightOvBottom
-      rightOvSpans = concatMap (\l -> padInner ri l ++ [nl]) (init rightOvAll) ++ padInner ri (last rightOvAll)
-      rightOverlay = Styled defaultStyle { sBorder = Just (Border Rounded blue) } (spans rightOvSpans)
+      rightOverlay = wrapInBox rw rightOverlayBoxLines
 
       -- Build each pane as terminal + overlay
       paddedLeftTerm = take termRows (leftTermLines ++ repeat [])
@@ -493,24 +454,18 @@ scenario06 =
 
       -- Command palette overlay
       paletteW = 70
-      paletteInner = paletteW - 4
 
-      paletteContent =
-        [ [b yellow "Ctrl-B commands (prefix mode)"]
-        , interiorSep paletteInner
-        , [s " ", c blue "c", s "       new window          ", c blue "o", s "       cycle panes"]
-        , [s " ", c blue "n / p", s "   next / prev window  ", c blue "[", s "       copy mode (scroll)"]
-        , [s " ", c blue "0-9", s "     switch to window N  ", b green "a", s "       ", c green "agent overlay"]
-        , [s " ", c blue "%", s "       vertical split      ", c blue "d", s "       detach session"]
-        , [s " ", c blue "\"", s "       horizontal split    ", c blue "x", s "       close pane"]
+      paletteBoxLines =
+        [ BContent [b yellow "Ctrl-B commands (prefix mode)"]
+        , BSep
+        , BContent [s " ", c blue "c", s "       new window          ", c blue "o", s "       cycle panes"]
+        , BContent [s " ", c blue "n / p", s "   next / prev window  ", c blue "[", s "       copy mode (scroll)"]
+        , BContent [s " ", c blue "0-9", s "     switch to window N  ", b green "a", s "       ", c green "agent overlay"]
+        , BContent [s " ", c blue "%", s "       vertical split      ", c blue "d", s "       detach session"]
+        , BContent [s " ", c blue "\"", s "       horizontal split    ", c blue "x", s "       close pane"]
         ]
 
-      paletteSpans = concatMap (\l -> padInner paletteInner l ++ [nl]) (init paletteContent)
-                     ++ padInner paletteInner (last paletteContent)
-
-      paletteOverlay = Styled defaultStyle
-        { sBorder = Just (Border Rounded blue) }
-        (spans paletteSpans)
+      paletteOverlay = wrapInBox paletteW paletteBoxLines
 
       totalRows = termH - 1
       paddedTerm = take totalRows (termContent ++ repeat [])
@@ -551,48 +506,43 @@ scenario07 =
       titleText = "services  Procfile: ~/projects/webapp/Procfile"
       titleGap = T.replicate (max 0 (inner - T.length titleText - T.length "Esc: close")) " "
 
-      overlayContent =
-        [ [b cyan "services", s "  ", d dim "Procfile: ~/projects/webapp/Procfile", s titleGap, d dim "Esc: close"]
-        , interiorSep inner
+      overlayBoxLines =
+        [ BContent [b cyan "services", s "  ", d dim "Procfile: ~/projects/webapp/Procfile", s titleGap, d dim "Esc: close"]
+        , BSep
         -- Headers
-        , svcRow [s " ", b blue "Services"] [s " ", b blue "Procfile Definition"]
-        , svcRow [s " ", d dim (T.replicate 33 "\x2500")] [s " ", d dim (T.replicate (rightW - 1) "\x2500")]
+        , BContent (svcRow [s " ", b blue "Services"] [s " ", b blue "Procfile Definition"])
+        , BContent (svcRow [s " ", d dim (T.replicate 33 "\x2500")] [s " ", d dim (T.replicate (rightW - 1) "\x2500")])
         -- Service entries
-        , svcRow [s " ", c green "\x25CF", s " ", b fg "api", s "          ", c green "running", s " ", d dim ":8080"]
-                 [s " ", d dim "# API server"]
-        , svcRow [s "   ", d dim "pid 42381 | 2m uptime"]
-                 [s " ", c purple "api:", s " node dist/server.js"]
-        , svcRow [s " ", c green "\x25CF", s " ", c fg "worker", s "       ", c green "running"]
-                 []
-        , svcRow [s "   ", d dim "pid 42382 | 2m uptime"]
-                 [s " ", d dim "# Background job worker"]
-        , svcRow [s " ", c red "\x25CF", s " ", c fg "db", s "           ", c red "crashed"]
-                 [s " ", c purple "worker:", s " node dist/worker.js"]
-        , svcRow [s "   ", c red "exit 1 | restarting..."]
-                 []
-        , svcRow [s " ", c green "\x25CF", s " ", c fg "redis", s "        ", c green "running", s " ", d dim ":6379"]
-                 [s " ", d dim "# Database"]
-        , svcRow [s "   ", d dim "pid 42384 | 2m uptime"]
-                 [s " ", c purple "db:", s " postgres -D data/"]
-        , svcRow [s " ", c yellow "\x25CF", s " ", c fg "proxy", s "        ", c yellow "starting", s " ", d dim ":443"]
-                 []
-        , svcRow [s "   ", d dim "pid 42385 | 0s uptime"]
-                 [s " ", d dim "# Redis cache"]
-        , svcRow [] [s " ", c purple "redis:", s " redis-server"]
-        , svcRow [s " ", d dim "5 services | 3 running"] []
-        , svcRow [s " ", d dim "1 crashed | 1 starting"]
-                 [s " ", d dim "# Reverse proxy"]
-        , svcRow [] [s " ", c purple "proxy:", s " caddy run"]
-        , interiorSep inner
-        , [s " ", d dim "r: restart  s: stop  l: logs  Enter: connect to service  q: quit"]
+        , BContent (svcRow [s " ", c green "\x25CF", s " ", b fg "api", s "          ", c green "running", s " ", d dim ":8080"]
+                           [s " ", d dim "# API server"])
+        , BContent (svcRow [s "   ", d dim "pid 42381 | 2m uptime"]
+                           [s " ", c purple "api:", s " node dist/server.js"])
+        , BContent (svcRow [s " ", c green "\x25CF", s " ", c fg "worker", s "       ", c green "running"]
+                           [])
+        , BContent (svcRow [s "   ", d dim "pid 42382 | 2m uptime"]
+                           [s " ", d dim "# Background job worker"])
+        , BContent (svcRow [s " ", c red "\x25CF", s " ", c fg "db", s "           ", c red "crashed"]
+                           [s " ", c purple "worker:", s " node dist/worker.js"])
+        , BContent (svcRow [s "   ", c red "exit 1 | restarting..."]
+                           [])
+        , BContent (svcRow [s " ", c green "\x25CF", s " ", c fg "redis", s "        ", c green "running", s " ", d dim ":6379"]
+                           [s " ", d dim "# Database"])
+        , BContent (svcRow [s "   ", d dim "pid 42384 | 2m uptime"]
+                           [s " ", c purple "db:", s " postgres -D data/"])
+        , BContent (svcRow [s " ", c yellow "\x25CF", s " ", c fg "proxy", s "        ", c yellow "starting", s " ", d dim ":443"]
+                           [])
+        , BContent (svcRow [s "   ", d dim "pid 42385 | 0s uptime"]
+                           [s " ", d dim "# Redis cache"])
+        , BContent (svcRow [] [s " ", c purple "redis:", s " redis-server"])
+        , BContent (svcRow [s " ", d dim "5 services | 3 running"] [])
+        , BContent (svcRow [s " ", d dim "1 crashed | 1 starting"]
+                           [s " ", d dim "# Reverse proxy"])
+        , BContent (svcRow [] [s " ", c purple "proxy:", s " caddy run"])
+        , BSep
+        , BContent [s " ", d dim "r: restart  s: stop  l: logs  Enter: connect to service  q: quit"]
         ]
 
-      overlaySpans = concatMap (\l -> padInner inner l ++ [nl]) (init overlayContent)
-                     ++ padInner inner (last overlayContent)
-
-      overlayLayout = Styled defaultStyle
-        { sBorder = Just (Border Rounded blue) }
-        (spans overlaySpans)
+      overlayLayout = wrapInBox ow overlayBoxLines
 
       totalRows = termH - 1
       paddedTerm = take totalRows (termContent ++ repeat [])
@@ -638,61 +588,56 @@ scenario08 =
 
       titleGap = T.replicate (max 0 (inner - T.length "services  logs view" - T.length "Tab: tree  Esc: close")) " "
 
-      overlayContent =
-        [ [b cyan "services", s "  ", d dim "logs view", s titleGap, d dim "Tab: tree  Esc: close"]
-        , interiorSep inner
+      overlayBoxLines =
+        [ BContent [b cyan "services", s "  ", d dim "logs view", s titleGap, d dim "Tab: tree  Esc: close"]
+        , BSep
         -- Header + logs
-        , svcRow [s " ", b cyan "api", s " ", d dim ":8080"]
-                 [s " ", b blue "Services"]
-        , svcRow [s " ", c grey "14:22:15 GET /api/users 200 12ms"]
-                 [s " ", d dim (T.replicate 30 "\x2500")]
-        , svcRow [s " ", c grey "14:22:16 GET /api/tasks 200 8ms"]
-                 [s " ", c green "\x25CF", s " ", b fg "api", s "      ", c green "running", s " ", d dim ":8080"]
-        , svcRow [s " ", c yellow "14:22:18 WARN Slow query (245ms)"]
-                 [s " ", c green "\x25CF", s " ", c fg "worker", s "   ", c green "running"]
-        , svcRow [s " ", c grey "14:22:20 POST /api/tasks 201"]
-                 [s " ", c red "\x25CF", s " ", c fg "db", s "       ", c red "crashed"]
-        , svcRow [s " ", c grey "14:22:22 GET /api/health 200 1ms"]
-                 [s " ", c green "\x25CF", s " ", c fg "redis", s "    ", c green "running", s " ", d dim ":6379"]
-        , logHdiv [c cyan "worker"]
-        , svcRow [s " ", c green "14:22:10 Job #4481 started"]
-                 [s " ", c yellow "\x25CF", s " ", c fg "proxy", s "    ", c yellow "starting", s " ", d dim ":443"]
-        , svcRow [s " ", c green "14:22:14 Job #4481 done (3.2s)"]
-                 []
-        , svcRow [s " ", c grey "14:22:20 Polling queue..."]
-                 [s " ", d dim "5 services | 3 running"]
-        , svcRow [s " ", c green "14:22:25 Job #4482 started"]
-                 [s " ", d dim "1 crashed | 1 starting"]
-        , logHdiv [c cyan "db", s " ", c red "crashed"]
-        , svcRow [s " ", c yellow "14:22:15 WARN checkpoints frequent"]
-                 []
-        , svcRow [s " ", c red "14:22:18 FATAL data dir corrupted"]
-                 []
-        , svcRow [s " ", c red "14:22:18 server process exit 1"]
-                 []
-        , svcRow [s " ", c red "14:22:19 shutting down"]
-                 []
-        , svcRow [s " ", c yellow "14:22:20 restarting in 5s..."]
-                 []
-        , logHdiv [c cyan "redis", s " ", d dim ":6379"]
-        , svcRow [s " ", c grey "14:22:15 # DB 0: 847 keys"]
-                 []
-        , svcRow [s " ", c grey "14:22:20 # Background saving OK"]
-                 []
-        , svcRow [s " ", c grey "14:22:25 # DB 0: 851 keys"]
-                 []
-        , svcRow [s " ", c grey "14:22:30 # 11 clients connected"]
-                 []
-        , interiorSep inner
-        , [s " ", d dim "r: restart  s: stop  Tab: tree view  j/k: scroll  Enter: attach  q: quit"]
+        , BContent (svcRow [s " ", b cyan "api", s " ", d dim ":8080"]
+                           [s " ", b blue "Services"])
+        , BContent (svcRow [s " ", c grey "14:22:15 GET /api/users 200 12ms"]
+                           [s " ", d dim (T.replicate 30 "\x2500")])
+        , BContent (svcRow [s " ", c grey "14:22:16 GET /api/tasks 200 8ms"]
+                           [s " ", c green "\x25CF", s " ", b fg "api", s "      ", c green "running", s " ", d dim ":8080"])
+        , BContent (svcRow [s " ", c yellow "14:22:18 WARN Slow query (245ms)"]
+                           [s " ", c green "\x25CF", s " ", c fg "worker", s "   ", c green "running"])
+        , BContent (svcRow [s " ", c grey "14:22:20 POST /api/tasks 201"]
+                           [s " ", c red "\x25CF", s " ", c fg "db", s "       ", c red "crashed"])
+        , BContent (svcRow [s " ", c grey "14:22:22 GET /api/health 200 1ms"]
+                           [s " ", c green "\x25CF", s " ", c fg "redis", s "    ", c green "running", s " ", d dim ":6379"])
+        , BContent (logHdiv [c cyan "worker"])
+        , BContent (svcRow [s " ", c green "14:22:10 Job #4481 started"]
+                           [s " ", c yellow "\x25CF", s " ", c fg "proxy", s "    ", c yellow "starting", s " ", d dim ":443"])
+        , BContent (svcRow [s " ", c green "14:22:14 Job #4481 done (3.2s)"]
+                           [])
+        , BContent (svcRow [s " ", c grey "14:22:20 Polling queue..."]
+                           [s " ", d dim "5 services | 3 running"])
+        , BContent (svcRow [s " ", c green "14:22:25 Job #4482 started"]
+                           [s " ", d dim "1 crashed | 1 starting"])
+        , BContent (logHdiv [c cyan "db", s " ", c red "crashed"])
+        , BContent (svcRow [s " ", c yellow "14:22:15 WARN checkpoints frequent"]
+                           [])
+        , BContent (svcRow [s " ", c red "14:22:18 FATAL data dir corrupted"]
+                           [])
+        , BContent (svcRow [s " ", c red "14:22:18 server process exit 1"]
+                           [])
+        , BContent (svcRow [s " ", c red "14:22:19 shutting down"]
+                           [])
+        , BContent (svcRow [s " ", c yellow "14:22:20 restarting in 5s..."]
+                           [])
+        , BContent (logHdiv [c cyan "redis", s " ", d dim ":6379"])
+        , BContent (svcRow [s " ", c grey "14:22:15 # DB 0: 847 keys"]
+                           [])
+        , BContent (svcRow [s " ", c grey "14:22:20 # Background saving OK"]
+                           [])
+        , BContent (svcRow [s " ", c grey "14:22:25 # DB 0: 851 keys"]
+                           [])
+        , BContent (svcRow [s " ", c grey "14:22:30 # 11 clients connected"]
+                           [])
+        , BSep
+        , BContent [s " ", d dim "r: restart  s: stop  Tab: tree view  j/k: scroll  Enter: attach  q: quit"]
         ]
 
-      overlaySpans = concatMap (\l -> padInner inner l ++ [nl]) (init overlayContent)
-                     ++ padInner inner (last overlayContent)
-
-      overlayLayout = Styled defaultStyle
-        { sBorder = Just (Border Rounded blue) }
-        (spans overlaySpans)
+      overlayLayout = wrapInBox ow overlayBoxLines
 
       totalRows = termH - 1
       paddedTerm = take totalRows (termContent ++ repeat [])
