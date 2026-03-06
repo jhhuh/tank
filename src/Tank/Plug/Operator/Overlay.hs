@@ -15,7 +15,6 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word8)
 import qualified Data.Vector as V
 
@@ -24,7 +23,8 @@ import Tank.Layout.Types
   , Content(..), noEdges, plainSpan
   )
 import Tank.Layout.Render (renderLayout)
-import Tank.Layout.Cell (CellGrid(..), Cell(..), Color(..))
+import Tank.Layout.Cell (CellGrid(..), Color(..))
+import Tank.Layout.Backend.ANSI (renderRowANSI)
 
 data Role = User | Assistant | System | ToolUse | ToolResult
   deriving (Eq, Show)
@@ -108,7 +108,7 @@ renderOverlay st termW termH =
   in header <> B8.concat rows <> footer
 
 -- | Render one row of a CellGrid at a specific terminal position.
--- Emits cursor-move + SGR-encoded cells for a single row.
+-- Emits cursor-move + delta-encoded ANSI cells for a single row.
 renderGridRow :: CellGrid -> Int -> Int -> [ByteString]
 renderGridRow (CellGrid rows) startCol rowIdx
   | rowIdx < 0 || rowIdx >= V.length rows = []
@@ -116,25 +116,7 @@ renderGridRow (CellGrid rows) startCol rowIdx
       let row = rows V.! rowIdx
           termRow = rowIdx + 1  -- terminal rows are 1-based
           moveCmd = B8.pack ("\x1b[" ++ show termRow ++ ";" ++ show startCol ++ "H")
-          cellBytes = V.toList $ V.map cellToANSI row
-          reset = B8.pack "\x1b[0m"
-      in [moveCmd, B8.concat cellBytes, reset]
-
--- | Convert a single tank-layout Cell to an ANSI escape + character.
-cellToANSI :: Cell -> ByteString
-cellToANSI (Cell ch fg bg bold dim) =
-  let parts = [B8.pack "\x1b[0"]  -- reset base
-        ++ [B8.pack ";1" | bold]
-        ++ [B8.pack ";2" | dim]
-        ++ fgPart fg
-        ++ bgPart bg
-        ++ [B8.pack "m"]
-  in B8.concat parts <> encodeUtf8 (T.singleton ch)
-  where
-    fgPart Default = []
-    fgPart (RGB r g b) = [B8.pack (";38;2;" ++ show r ++ ";" ++ show g ++ ";" ++ show b)]
-    bgPart Default = []
-    bgPart (RGB r g b) = [B8.pack (";48;2;" ++ show r ++ ";" ++ show g ++ ";" ++ show b)]
+      in [moveCmd, renderRowANSI row]
 
 -- | Format a message into display lines, wrapping to fit the inner width.
 formatMessage :: Int -> (Role, Text) -> [Text]

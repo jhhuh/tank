@@ -1,5 +1,6 @@
 module Tank.Layout.Backend.ANSI
   ( renderANSI
+  , renderRowANSI
   ) where
 
 import Data.ByteString (ByteString)
@@ -24,6 +25,13 @@ renderANSI (CellGrid rows) =
       let nl = if rowIdx < V.length rows - 1 then string7 "\n" else mempty
           (prev', rb) = renderRow prev row
       in (prev', b <> rb <> nl)
+
+-- | Render a single row of cells to ANSI ByteString, with delta-encoding.
+-- Includes trailing SGR reset. Useful for stamping rows at terminal positions.
+renderRowANSI :: V.Vector Cell -> ByteString
+renderRowANSI row =
+  LBS.toStrict $ toLazyByteString $
+    snd (renderRow Nothing row) <> string7 "\ESC[0m"
 
 renderRow :: Prev -> V.Vector Cell -> (Prev, Builder)
 renderRow prev row = V.foldl' step (prev, mempty) row
