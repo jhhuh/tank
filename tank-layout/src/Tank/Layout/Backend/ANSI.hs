@@ -61,14 +61,6 @@ sgrBg :: Color -> Builder
 sgrBg Default = string7 "\ESC[49m"
 sgrBg (RGB r g b) = string7 "\ESC[48;2;" <> w8 r <> string7 ";" <> w8 g <> string7 ";" <> w8 b <> string7 "m"
 
-sgrBold :: Bool -> Builder
-sgrBold True  = string7 "\ESC[1m"
-sgrBold False = string7 "\ESC[22m"
-
-sgrDim :: Bool -> Builder
-sgrDim True  = string7 "\ESC[2m"
-sgrDim False = string7 "\ESC[22m"
-
 -- | Emit intensity attributes as a unit. SGR 22 resets both bold and dim,
 -- so when either changes we must reset and re-assert both.
 sgrIntensity :: Bool -> Bool -> Builder
