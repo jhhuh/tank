@@ -35,6 +35,8 @@ test-suite tank-layout-tests
     , hspec        >= 2.10 && < 3
     , text         >= 2.0  && < 3
     , vector       >= 0.13 && < 1
+  other-modules:
+    Tank.Layout.CellSpec
   hs-source-dirs:   test
   default-language: GHC2021
   -- hspec-discover provided on PATH by nix devShell
