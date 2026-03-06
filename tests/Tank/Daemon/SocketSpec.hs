@@ -5,7 +5,7 @@ import Data.UUID (nil)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 import Network.Socket (accept, close)
-import System.IO (hClose, hFlush)
+import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory)
 
 import Tank.Core.Types (PlugId(..))
@@ -30,7 +30,6 @@ spec = describe "Socket message framing" $ do
       clientSock <- connectSocket path
       clientH <- socketHandle clientSock
       writeEnvelope clientH env
-      hFlush clientH
       hClose clientH
       received <- takeMVar result
       received `shouldBe` Right env

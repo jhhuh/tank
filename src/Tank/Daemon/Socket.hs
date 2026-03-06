@@ -7,18 +7,24 @@ module Tank.Daemon.Socket
   , writeEnvelope
   ) where
 
+import qualified Capnp.Bits
 import qualified Capnp.Classes as C
 import qualified Capnp.IO as CIO
+import Control.Exception (IOException, try)
 import Network.Socket (Socket, SockAddr(..), Family(..), SocketType(..), socket, bind, listen, connect, socketToHandle)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
-import System.IO (Handle, IOMode(..), hSetBinaryMode, hSetBuffering, BufferMode(..))
+import System.IO (Handle, IOMode(..), hSetBinaryMode, hSetBuffering, BufferMode(..), hFlush)
 import System.Posix.User (getEffectiveUserID)
 
 import Tank.Core.Protocol (MessageEnvelope)
 import Tank.Core.Wire (toWire, fromWire)
 import qualified Tank.Gen.Protocol as CP
+
+-- | Max Cap'n Proto message size in 64-bit words (~1 MiB).
+maxMessageWords :: Capnp.Bits.WordCount
+maxMessageWords = 131072
 
 -- | Get the socket path for the tank daemon
 socketPath :: String -> IO FilePath
@@ -60,12 +66,17 @@ socketHandle sock = do
   pure h
 
 -- | Read a framed Cap'n Proto message from a Handle, decode to domain type.
--- Throws on EOF or parse error (error handling deferred to client handler).
+-- Returns Left on IO errors (EOF, socket closed) or wire conversion failures.
 readEnvelope :: Handle -> IO (Either String MessageEnvelope)
 readEnvelope h = do
-  parsed <- CIO.hGetParsed h maxBound :: IO (C.Parsed CP.MessageEnvelope)
-  pure $ fromWire parsed
+  result <- try (CIO.hGetParsed h maxMessageWords :: IO (C.Parsed CP.MessageEnvelope))
+  case result of
+    Left (e :: IOException) -> pure $ Left (show e)
+    Right parsed -> pure $ fromWire parsed
 
 -- | Encode a domain MessageEnvelope and write as framed Cap'n Proto.
+-- Flushes after writing to ensure the message is sent immediately.
 writeEnvelope :: Handle -> MessageEnvelope -> IO ()
-writeEnvelope h env = CIO.hPutParsed h (toWire env)
+writeEnvelope h env = do
+  CIO.hPutParsed h (toWire env)
+  hFlush h
