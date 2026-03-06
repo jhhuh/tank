@@ -13,12 +13,12 @@ module Tank.Daemon.State
 import Control.Concurrent.STM
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Network.Socket (Socket)
+import System.IO (Handle)
 import Tank.Core.Types (CellId(..), PlugId(..), Cell(..), PlugInfo(..))
 
 data PlugConn = PlugConn
   { pcInfo   :: !PlugInfo
-  , pcSocket :: !Socket
+  , pcHandle :: !Handle
   }
 
 instance Show PlugConn where
