@@ -57,17 +57,18 @@ data Pane = Pane
   , pVTerm   :: !(IORef VTerm)
   }
 
--- | How panes are arranged within a window
-data SplitDir = Horizontal | Vertical deriving (Eq, Show)
+-- | How panes are arranged within a window.
+-- Named PaneSplit/PaneLayout to distinguish from tank-layout's rendering types.
+data PaneSplit = PHorizontal | PVertical deriving (Eq, Show)
 
-data Layout
-  = LPane !Int                              -- single pane by id
-  | LSplit !SplitDir !Float Layout Layout   -- direction, ratio (0..1), first, second
+data PaneLayout
+  = LPane !Int                                    -- single pane by id
+  | LSplit !PaneSplit !Float PaneLayout PaneLayout -- direction, ratio (0..1), first, second
   deriving (Show)
 
 -- | A window: a layout of panes
 data Window = Window
-  { wLayout :: !(IORef Layout)
+  { wLayout :: !(IORef PaneLayout)
   , wActive :: !(IORef Int)     -- active pane id within this window
   }
 
@@ -182,7 +183,7 @@ createWindowWithPane ts = do
   pure winId
 
 -- | Split the active pane in the active window
-splitActivePane :: TermState -> SplitDir -> IO ()
+splitActivePane :: TermState -> PaneSplit -> IO ()
 splitActivePane ts dir = do
   mwin <- getActiveWindow ts
   case mwin of
@@ -194,11 +195,11 @@ splitActivePane ts dir = do
       (cols, rows) <- getTermSize
       let (_, _, w, h) = findPaneRegion layout activePaneId cols rows
           (newW, newH) = case dir of
-            Vertical   -> (w `div` 2, h)
-            Horizontal -> (w, h `div` 2)
+            PVertical   -> (w `div` 2, h)
+            PHorizontal -> (w, h `div` 2)
           (oldW, oldH) = case dir of
-            Vertical   -> (w - newW - 1, h)       -- -1 for border
-            Horizontal -> (w, h - newH - 1)
+            PVertical   -> (w - newW - 1, h)       -- -1 for border
+            PHorizontal -> (w, h - newH - 1)
       -- Resize the existing pane
       panes <- readIORef (tsPanes ts)
       case IM.lookup activePaneId panes of
@@ -216,7 +217,7 @@ splitActivePane ts dir = do
       renderAllPanes ts
 
 -- | Replace a pane id in the layout tree with a new subtree
-replacePaneInLayout :: Int -> Layout -> Layout -> Layout
+replacePaneInLayout :: Int -> PaneLayout -> PaneLayout -> PaneLayout
 replacePaneInLayout target replacement (LPane pid)
   | pid == target = replacement
   | otherwise     = LPane pid
@@ -225,7 +226,7 @@ replacePaneInLayout target replacement (LSplit d r l1 l2) =
              (replacePaneInLayout target replacement l2)
 
 -- | Find the screen region for a pane: (row, col, width, height)
-findPaneRegion :: Layout -> Int -> Int -> Int -> (Int, Int, Int, Int)
+findPaneRegion :: PaneLayout -> Int -> Int -> Int -> (Int, Int, Int, Int)
 findPaneRegion layout paneId totalW totalH = go layout 0 0 totalW totalH
   where
     go (LPane pid) r c w h
@@ -233,17 +234,17 @@ findPaneRegion layout paneId totalW totalH = go layout 0 0 totalW totalH
       | otherwise     = (-1, -1, 0, 0)
     go (LSplit dir ratio l1 l2) r c w h =
       let result1 = case dir of
-            Vertical ->
+            PVertical ->
               let w1 = floor (fromIntegral w * ratio) - 1  -- -1 for border
               in go l1 r c (max 1 w1) h
-            Horizontal ->
+            PHorizontal ->
               let h1 = floor (fromIntegral h * ratio) - 1
               in go l1 r c w (max 1 h1)
           result2 = case dir of
-            Vertical ->
+            PVertical ->
               let w1 = floor (fromIntegral w * ratio)
               in go l2 r (c + w1) (max 1 (w - w1)) h
-            Horizontal ->
+            PHorizontal ->
               let h1 = floor (fromIntegral h * ratio)
               in go l2 (r + h1) c w (max 1 (h - h1))
       in if fst4 result1 >= 0 then result1 else result2
@@ -288,12 +289,12 @@ paneReaderThread ts pane paneId = do
             go fd'
 
 -- | Check if a pane id is in a layout
-layoutContains :: Int -> Layout -> Bool
+layoutContains :: Int -> PaneLayout -> Bool
 layoutContains pid (LPane p) = pid == p
 layoutContains pid (LSplit _ _ l1 l2) = layoutContains pid l1 || layoutContains pid l2
 
 -- | Get all pane ids from a layout
-layoutPaneIds :: Layout -> [Int]
+layoutPaneIds :: PaneLayout -> [Int]
 layoutPaneIds (LPane pid) = [pid]
 layoutPaneIds (LSplit _ _ l1 l2) = layoutPaneIds l1 ++ layoutPaneIds l2
 
@@ -342,7 +343,7 @@ paneProcessWatcher ts paneId ph = do
               renderAllPanes ts
 
 -- | Remove a pane from layout, returning Nothing if layout becomes empty
-removePaneFromLayout :: Int -> Layout -> Maybe Layout
+removePaneFromLayout :: Int -> PaneLayout -> Maybe PaneLayout
 removePaneFromLayout pid (LPane p)
   | pid == p  = Nothing
   | otherwise = Just (LPane p)
@@ -351,10 +352,10 @@ removePaneFromLayout pid (LSplit _ _ l1 l2) =
     (Nothing, Nothing) -> Nothing
     (Nothing, Just r)  -> Just r
     (Just l, Nothing)  -> Just l
-    (Just l, Just r)   -> Just (LSplit Vertical 0.5 l r)  -- keep same dir?
+    (Just l, Just r)   -> Just (LSplit PVertical 0.5 l r)  -- keep same dir?
 
 -- | Resize all panes in a layout to fit their computed regions
-resizePanesInLayout :: TermState -> Layout -> IO ()
+resizePanesInLayout :: TermState -> PaneLayout -> IO ()
 resizePanesInLayout ts layout = do
   (totalW, totalH) <- getTermSize
   panes <- readIORef (tsPanes ts)
@@ -434,13 +435,13 @@ renderAllPanes ts = do
       BS.hPut stdout $ BS8.pack $
         "\x1b[1;" ++ show totalH ++ "r\x1b[2J\x1b[H"
       -- Render each pane
-      renderLayout ts panes layout activePid 0 0 totalW totalH
+      renderPaneLayout ts panes layout activePid 0 0 totalW totalH
       drawStatusLine ts False
       hFlush stdout
 
--- | Render a layout tree into screen regions
-renderLayout :: TermState -> IM.IntMap Pane -> Layout -> Int -> Int -> Int -> Int -> Int -> IO ()
-renderLayout _ts panes (LPane pid) activePid r c w h = do
+-- | Render a pane layout tree into screen regions
+renderPaneLayout :: TermState -> IM.IntMap Pane -> PaneLayout -> Int -> Int -> Int -> Int -> Int -> IO ()
+renderPaneLayout _ts panes (LPane pid) activePid r c w h = do
   case IM.lookup pid panes of
     Nothing -> pure ()
     Just pane -> do
@@ -453,34 +454,34 @@ renderLayout _ts panes (LPane pid) activePid r c w h = do
         BS.hPut stdout $ BS8.pack $
           "\x1b[" ++ show (r + cr + 1) ++ ";" ++ show (c + cc + 1) ++ "H"
 
-renderLayout ts panes (LSplit dir _ratio l1 l2) activePid r c w h = do
+renderPaneLayout ts panes (LSplit dir _ratio l1 l2) activePid r c w h = do
   let activeInL1 = layoutContains activePid l1
       -- Green for border next to active pane, dim for inactive
       borderSGR = if activeInL1 || layoutContains activePid l2
                   then "\x1b[32m"  -- green
                   else "\x1b[2m"   -- dim
   case dir of
-    Vertical -> do
+    PVertical -> do
       let w1 = w `div` 2
           w2 = w - w1 - 1  -- -1 for border
-      renderLayout ts panes l1 activePid r c w1 h
+      renderPaneLayout ts panes l1 activePid r c w1 h
       -- Draw vertical border (│ = U+2502)
       forM_ [0 .. h - 1] $ \row -> do
         BS.hPut stdout $ BS8.pack
           ("\x1b[" ++ show (r + row + 1) ++ ";" ++ show (c + w1 + 1) ++ "H" ++ borderSGR)
           <> encodeUtf8 "\x2502"
       BS.hPut stdout "\x1b[0m"
-      renderLayout ts panes l2 activePid r (c + w1 + 1) w2 h
-    Horizontal -> do
+      renderPaneLayout ts panes l2 activePid r (c + w1 + 1) w2 h
+    PHorizontal -> do
       let h1 = h `div` 2
           h2 = h - h1 - 1  -- -1 for border
-      renderLayout ts panes l1 activePid r c w h1
+      renderPaneLayout ts panes l1 activePid r c w h1
       -- Draw horizontal border (─ = U+2500)
       BS.hPut stdout $ BS8.pack
         ("\x1b[" ++ show (r + h1 + 1) ++ ";" ++ show (c + 1) ++ "H" ++ borderSGR)
         <> BS.concat (replicate w (encodeUtf8 "\x2500"))
       BS.hPut stdout "\x1b[0m"
-      renderLayout ts panes l2 activePid (r + h1 + 1) c w h2
+      renderPaneLayout ts panes l2 activePid (r + h1 + 1) c w h2
 
 -- | Render a VTerm into a specific screen region with SGR attributes.
 -- Uses delta-encoding: only emits SGR when attributes change between cells.
@@ -640,8 +641,8 @@ handlePrefixCommand ts byte pane = case chr (fromIntegral byte) of
   'c' -> void $ createWindowWithPane ts
   'n' -> switchNextWindow ts 1
   'p' -> switchNextWindow ts (-1)
-  '%' -> splitActivePane ts Vertical      -- vertical split
-  '"' -> splitActivePane ts Horizontal    -- horizontal split
+  '%' -> splitActivePane ts PVertical      -- vertical split
+  '"' -> splitActivePane ts PHorizontal   -- horizontal split
   'o' -> cyclePaneInWindow ts             -- cycle panes
   'a' -> do
     ov <- readIORef (pOverlay pane)

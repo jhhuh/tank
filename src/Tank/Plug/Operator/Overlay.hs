@@ -17,6 +17,14 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word8)
+import qualified Data.Vector as V
+
+import Tank.Layout.Types
+  ( Layout(..), Style(..), Border(..), BorderStyle(..)
+  , Content(..), noEdges, plainSpan
+  )
+import Tank.Layout.Render (renderLayout)
+import Tank.Layout.Cell (CellGrid(..), Cell(..), Color(..))
 
 data Role = User | Assistant | System | ToolUse | ToolResult
   deriving (Eq, Show)
@@ -46,7 +54,7 @@ newOverlayState = OverlayState
   , osStatus    = "idle"
   }
 
--- | Render the overlay as raw ANSI escape sequences.
+-- | Render the overlay using tank-layout.
 -- Returns a ByteString that, when written to the terminal, draws a floating
 -- box on the right side without clearing the content behind it.
 renderOverlay :: OverlayState -> Int -> Int -> ByteString
@@ -62,64 +70,71 @@ renderOverlay st termW termH =
       allLines = concatMap (formatMessage innerW) (osMessages st)
       totalLines = length allLines
 
-      -- Reserve 2 lines inside the box for the input area (separator + input)
-      msgAreaH = boxH - 2
+      -- Reserve 1 line inside the box for the input area
+      msgAreaH = boxH - 2  -- -2 for border top/bottom
+      inputAreaH = 1
+      contentH = msgAreaH - inputAreaH
       -- Clamp scroll position
-      maxScroll = max 0 (totalLines - msgAreaH)
+      maxScroll = max 0 (totalLines - contentH)
       scroll = min (osScrollPos st) maxScroll
       -- Visible message lines
-      visibleMsgLines = take msgAreaH (drop scroll allLines)
+      visibleMsgLines = take contentH (drop scroll allLines)
       -- Pad to fill message area
-      paddedMsgLines = take msgAreaH (visibleMsgLines ++ repeat "")
+      paddedMsgLines = take contentH (visibleMsgLines ++ repeat "")
 
-      -- Input line: "> input█" truncated to fit
+      -- Input line: "> input█"
       inputText = "> " <> T.take (innerW - 3) (osInputBuf st) <> "\x2588"
-      inputLine = padLine innerW inputText
 
-      -- Title bar
-      titleTag = "\x2524 tank operator \x251C"
-      titleTagLen = T.length titleTag
-      topBorder = "\x250C" <> "\x2500"
-                  <> titleTag
-                  <> T.replicate (boxW - 2 - 1 - titleTagLen) "\x2500"
-                  <> "\x2510"
+      -- Build the content: messages + input, joined by newlines
+      contentText = T.intercalate "\n" paddedMsgLines <> "\n" <> inputText
 
-      -- Status bar in bottom border
-      statusTag = "\x2500\x2524 " <> T.take (innerW - 4) (osStatus st) <> " \x251C"
-      statusTagLen = T.length statusTag
-      bottomBorder = "\x2514"
-                     <> statusTag
-                     <> T.replicate (boxW - 1 - statusTagLen) "\x2500"
-                     <> "\x2518"
+      -- Build tank-layout tree: bordered box with title and status
+      overlayLayout = Styled Style
+        { sBorder  = Just (Border Single Default)
+        , sPadding = noEdges
+        , sTitle   = Just (" tank operator ", " " <> T.take (innerW - 4) (osStatus st) <> " ")
+        , sBg      = Nothing
+        }
+        (Leaf (Text [plainSpan contentText]))
 
-      -- Build output: save cursor, draw rows, restore cursor
+      -- Render to CellGrid
+      grid = renderLayout boxW boxH overlayLayout
+
+      -- Build output: save cursor, stamp each row at position, restore cursor
       header = B8.pack "\x1b7"  -- save cursor
       footer = B8.pack "\x1b8"  -- restore cursor
-
-      drawLine row txt = moveTo row startCol <> encodeUtf8 txt
-
-      -- Row 1: top border
-      rows = [drawLine 1 topBorder]
-          ++ [drawLine (r + 2) (boxedLine innerW ln) | (r, ln) <- zip [0..] paddedMsgLines]
-          ++ [drawLine (msgAreaH + 2) (boxedLine innerW inputLine)]
-          ++ [drawLine (msgAreaH + 3) bottomBorder]
+      rows = concatMap (renderGridRow grid startCol) [0 .. boxH - 1]
 
   in header <> B8.concat rows <> footer
 
--- | Move cursor to (row, col) using ANSI escape.
-moveTo :: Int -> Int -> ByteString
-moveTo row col = B8.pack ("\x1b[" ++ show row ++ ";" ++ show col ++ "H")
+-- | Render one row of a CellGrid at a specific terminal position.
+-- Emits cursor-move + SGR-encoded cells for a single row.
+renderGridRow :: CellGrid -> Int -> Int -> [ByteString]
+renderGridRow (CellGrid rows) startCol rowIdx
+  | rowIdx < 0 || rowIdx >= V.length rows = []
+  | otherwise =
+      let row = rows V.! rowIdx
+          termRow = rowIdx + 1  -- terminal rows are 1-based
+          moveCmd = B8.pack ("\x1b[" ++ show termRow ++ ";" ++ show startCol ++ "H")
+          cellBytes = V.toList $ V.map cellToANSI row
+          reset = B8.pack "\x1b[0m"
+      in [moveCmd, B8.concat cellBytes, reset]
 
--- | Wrap a content line with box-drawing vertical borders.
-boxedLine :: Int -> Text -> Text
-boxedLine innerW content =
-  "\x2502" <> padLine innerW content <> "\x2502"
-
--- | Pad or truncate a text line to exactly the given width.
-padLine :: Int -> Text -> Text
-padLine w t
-  | T.length t >= w = T.take w t
-  | otherwise       = t <> T.replicate (w - T.length t) " "
+-- | Convert a single tank-layout Cell to an ANSI escape + character.
+cellToANSI :: Cell -> ByteString
+cellToANSI (Cell ch fg bg bold dim) =
+  let parts = [B8.pack "\x1b[0"]  -- reset base
+        ++ [B8.pack ";1" | bold]
+        ++ [B8.pack ";2" | dim]
+        ++ fgPart fg
+        ++ bgPart bg
+        ++ [B8.pack "m"]
+  in B8.concat parts <> encodeUtf8 (T.singleton ch)
+  where
+    fgPart Default = []
+    fgPart (RGB r g b) = [B8.pack (";38;2;" ++ show r ++ ";" ++ show g ++ ";" ++ show b)]
+    bgPart Default = []
+    bgPart (RGB r g b) = [B8.pack (";48;2;" ++ show r ++ ";" ++ show g ++ ";" ++ show b)]
 
 -- | Format a message into display lines, wrapping to fit the inner width.
 formatMessage :: Int -> (Role, Text) -> [Text]

@@ -167,3 +167,36 @@ Rasterific (vector graphics rasterization to JuicyPixels images).
 - No background color support on status bar spans (barBg is approximated via styled text)
 - Interior separator lines are content-based (horizontal line chars), not true box separators
 - Bold/dim not visually distinct in PNG output (PNG backend doesn't vary font weight yet)
+
+---
+
+## 2026-03-06 — Task 9: Wire tank-layout into tank
+
+**Analysis:** Terminal.hs's `Layout` type (pane-ID tree: `LPane Int | LSplit ...`) is
+semantically different from tank-layout's `Layout` (declarative rendering tree:
+`Leaf | Split | Layers | Styled`). Replacing one with the other would be wrong -- they
+serve different purposes. Terminal.hs needs mutable pane-ID trees for workspace
+management (split/remove/resize/cycle). tank-layout is for rendering content.
+
+**Decision:** Minimum viable integration:
+1. Rename Terminal.hs types to `PaneLayout`/`PaneSplit` to avoid name collision
+2. Migrate Overlay.hs to use tank-layout for rendering (the natural integration point)
+3. Keep Terminal.hs's pane rendering as-is (VTerm cell rendering is tightly coupled to
+   the terminal emulator's Cell type which uses Color256/flag-based attrs, different
+   from tank-layout's RGB/bool-based Cell)
+
+**Changes made:**
+- `tank.cabal`: added `tank-layout` dependency
+- `src/Tank/Plug/Terminal.hs`:
+  - `Layout` → `PaneLayout`, `SplitDir` → `PaneSplit` (with `PHorizontal`/`PVertical`)
+  - `renderLayout` → `renderPaneLayout` (avoid name collision with tank-layout's)
+  - All pattern matches updated for new constructor names
+- `src/Tank/Plug/Operator/Overlay.hs`:
+  - `renderOverlay` now builds a tank-layout `Styled (Leaf (Text ...))` tree
+  - Uses `Tank.Layout.Render.renderLayout` to produce a `CellGrid`
+  - Custom `renderGridRow`/`cellToANSI` to stamp the grid at absolute terminal positions
+  - Removed manual box-drawing character construction
+  - Title and status hint now rendered by tank-layout's border/title system
+
+**Verification:** `cabal build all` succeeds with no warnings. All 23 tank-layout tests pass.
+Tank tests are disabled in cabal.project and don't reference changed types.
