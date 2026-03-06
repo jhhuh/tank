@@ -851,14 +851,13 @@ main = do
     Left err -> do
       putStrLn $ "Error: " ++ err
       putStrLn usage
-    Right (cmd, fontPath, outdir) -> do
+    Right (cmd, outdir) -> do
       createDirectoryIfMissing True outdir
-      let config = defaultPNGConfig { pngFontPath = fontPath }
+      let config = defaultPNGConfig
           allScenarios = scenarios outdir
       case cmd of
         "list" -> mapM_ (\sc -> putStrLn $ "  " ++ scenarioName sc ++ ": " ++ scenarioDesc sc) allScenarios
         "all" -> do
-          putStrLn $ "Using font: " ++ fontPath
           putStrLn $ "Output dir: " ++ outdir
           mapM_ (\sc -> do
             putStrLn $ "  rendering " ++ scenarioName sc ++ "..."
@@ -868,7 +867,6 @@ main = do
           putStrLn "\nDone!"
         name -> case filter (\sc -> scenarioName sc == name) allScenarios of
           [sc] -> do
-            putStrLn $ "Using font: " ++ fontPath
             scenarioRender sc config
             putStrLn $ "  ok " ++ scenarioName sc
           _ -> do
@@ -876,7 +874,6 @@ main = do
             let byNum = filter (\sc -> take 2 (scenarioName sc) == name) allScenarios
             case byNum of
               [sc] -> do
-                putStrLn $ "Using font: " ++ fontPath
                 scenarioRender sc config
                 putStrLn $ "  ok " ++ scenarioName sc
               _ -> do
@@ -884,24 +881,21 @@ main = do
                 putStrLn "Available scenarios:"
                 mapM_ (\sc -> putStrLn $ "  " ++ scenarioName sc) allScenarios
 
-parseArgs :: [String] -> Either String (String, FilePath, FilePath)
-parseArgs args = go args Nothing Nothing Nothing
+parseArgs :: [String] -> Either String (String, FilePath)
+parseArgs args = go args Nothing Nothing
   where
-    go [] _ _ Nothing = Left "No command specified. Use 'list', 'all', or a scenario name."
-    go [] (Just font) (Just outdir) (Just cmd) = Right (cmd, font, outdir)
-    go [] (Just font) Nothing (Just cmd) = Right (cmd, font, ".")
-    go [] Nothing _ (Just _) = Left "No font specified. Use --font PATH."
-    go ("--font":path:rest) _ outdir cmd = go rest (Just path) outdir cmd
-    go ("--outdir":path:rest) font _ cmd = go rest font (Just path) cmd
-    go (x:rest) font outdir Nothing
-      | x == "--font" = Left "--font requires a PATH argument"
+    go [] _ Nothing = Left "No command specified. Use 'list', 'all', or a scenario name."
+    go [] (Just outdir) (Just cmd) = Right (cmd, outdir)
+    go [] Nothing (Just cmd) = Right (cmd, ".")
+    go ("--outdir":path:rest) _ cmd = go rest (Just path) cmd
+    go (x:rest) outdir Nothing
       | x == "--outdir" = Left "--outdir requires a PATH argument"
-      | otherwise = go rest font outdir (Just x)
-    go (x:_) _ _ (Just _) = Left $ "Unexpected argument: " ++ x
+      | otherwise = go rest outdir (Just x)
+    go (x:_) _ (Just _) = Left $ "Unexpected argument: " ++ x
 
 usage :: String
 usage = unlines
-  [ "Usage: tank-render-concepts [--font PATH] [--outdir PATH] <command>"
+  [ "Usage: tank-render-concepts [--outdir PATH] <command>"
   , ""
   , "Commands:"
   , "  list              List all scenarios"
@@ -909,6 +903,5 @@ usage = unlines
   , "  <name>            Render one scenario by name or number"
   , ""
   , "Options:"
-  , "  --font PATH       Path to monospace TTF font"
   , "  --outdir PATH     Output directory (default: .)"
   ]

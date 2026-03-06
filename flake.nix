@@ -25,7 +25,7 @@
           ps.mkdocs
         ]);
 
-        conceptFont = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSansMono.ttf";
+        fontConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
       in
       {
         packages = {
@@ -38,10 +38,10 @@
           '';
           concept-images = pkgs.runCommand "tank-concept-images" {
             nativeBuildInputs = [ haskellPackages.tank-layout ];
+            FONTCONFIG_FILE = fontConf;
           } ''
             mkdir -p $out
-            tank-render-concepts all \
-              --font ${conceptFont} --outdir $out
+            tank-render-concepts all --outdir $out
           '';
         };
 

@@ -4,211 +4,207 @@ module Tank.Layout.Backend.PNG
   , defaultPNGConfig
   ) where
 
-import Codec.Picture (PixelRGBA8(..), Image, encodePng)
-import Graphics.Rasterific
-import Graphics.Rasterific.Texture (uniformTexture)
-import Graphics.Text.TrueType (loadFontFile, Font, stringBoundingBox, _xMax, _yMax)
+import Graphics.Rendering.Cairo
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Vector as V
+import Data.Word (Word8)
+import System.IO (openTempFile, hClose)
+import System.Directory (removeFile)
 import Tank.Layout.Cell
 
 -- | Configuration for PNG rendering.
 data PNGConfig = PNGConfig
-  { pngFontPath    :: !FilePath   -- ^ Path to a monospace TTF font
-  , pngFontSize    :: !Int        -- ^ Font size in pixels (default 14)
-  , pngTitleBar    :: !Bool       -- ^ Draw window chrome (title bar, traffic lights)
-  , pngWindowTitle :: !String     -- ^ Window title text
-  , pngPadding     :: !Int        -- ^ Outer padding around the window (default 20)
+  { pngFontFamily  :: !String   -- ^ Font family name (e.g., "DejaVu Sans Mono")
+  , pngFontSize    :: !Int      -- ^ Font size in pixels (default 14)
+  , pngTitleBar    :: !Bool     -- ^ Draw window chrome (title bar, traffic lights)
+  , pngWindowTitle :: !String   -- ^ Window title text
+  , pngPadding     :: !Int      -- ^ Outer padding around the window (default 20)
   } deriving (Show)
 
 defaultPNGConfig :: PNGConfig
 defaultPNGConfig = PNGConfig
-  { pngFontPath    = ""
+  { pngFontFamily  = "DejaVu Sans Mono"
   , pngFontSize    = 14
   , pngTitleBar    = True
   , pngWindowTitle = "tank"
   , pngPadding     = 20
   }
 
--- | Render a CellGrid to a PNG image as lazy ByteString.
-renderPNG :: PNGConfig -> CellGrid -> IO LBS.ByteString
-renderPNG config grid = do
-  fontResult <- loadFontFile (pngFontPath config)
-  case fontResult of
-    Left err -> error $ "Failed to load font: " ++ err
-    Right font -> pure $ encodePng $ renderImage config font grid
-
 -- Tokyo Night palette
-bgColor, fgColor :: PixelRGBA8
-bgColor     = PixelRGBA8 0x1a 0x1b 0x26 255   -- #1a1b26
-fgColor     = PixelRGBA8 0xc0 0xca 0xf5 255   -- #c0caf5
+type RGB = (Double, Double, Double)
 
-titleBarColor, borderColor, bodyColor, titleTextColor :: PixelRGBA8
-titleBarColor  = PixelRGBA8 0x24 0x28 0x3b 255  -- #24283b
-borderColor    = PixelRGBA8 0x3b 0x42 0x61 255  -- #3b4261
-bodyColor      = PixelRGBA8 0x13 0x14 0x1c 255  -- #13141c
-titleTextColor = PixelRGBA8 0x56 0x5f 0x89 255  -- #565f89
+bgRGB, fgRGB :: RGB
+bgRGB      = hexRGB 0x1a 0x1b 0x26
+fgRGB      = hexRGB 0xc0 0xca 0xf5
+
+titleBarRGB, borderRGB, bodyRGB, titleTextRGB :: RGB
+titleBarRGB  = hexRGB 0x24 0x28 0x3b
+borderRGB    = hexRGB 0x3b 0x42 0x61
+bodyRGB      = hexRGB 0x13 0x14 0x1c
+titleTextRGB = hexRGB 0x56 0x5f 0x89
+
+trafficRedRGB, trafficYellowRGB, trafficGreenRGB :: RGB
+trafficRedRGB    = hexRGB 0xff 0x5f 0x56
+trafficYellowRGB = hexRGB 0xff 0xbd 0x2e
+trafficGreenRGB  = hexRGB 0x27 0xc9 0x3f
+
+hexRGB :: Word8 -> Word8 -> Word8 -> RGB
+hexRGB r g b = (fromIntegral r / 255, fromIntegral g / 255, fromIntegral b / 255)
 
 titleBarHeight :: Int
 titleBarHeight = 38
 
-frameRadius :: Float
+frameRadius :: Double
 frameRadius = 10
 
 -- Inner padding between window frame and terminal content (pixels)
-innerPadX :: Int
-innerPadX = 10
-
-innerPadTop :: Int
-innerPadTop = 6
-
-innerPadBottom :: Int
+innerPadX, innerPadTop, innerPadBottom :: Int
+innerPadX      = 10
+innerPadTop    = 6
 innerPadBottom = 6
 
--- Traffic light button colors
-trafficRed, trafficYellow, trafficGreen :: PixelRGBA8
-trafficRed    = PixelRGBA8 0xff 0x5f 0x56 255
-trafficYellow = PixelRGBA8 0xff 0xbd 0x2e 255
-trafficGreen  = PixelRGBA8 0x27 0xc9 0x3f 255
+setRGB :: RGB -> Render ()
+setRGB (r, g, b) = setSourceRGB r g b
 
--- | Compute monospace cell dimensions and ascent from font metrics.
--- Returns (cellWidth, cellHeight, ascent) where ascent is the distance
--- from the top of the cell to the text baseline.
-cellDimensions :: Font -> Int -> (Int, Int, Float)
-cellDimensions font fontSize =
-  let dpi = 96
-      ptSize = pixelSizeInPointAtDpi (fromIntegral fontSize) dpi
-      bbox = stringBoundingBox font dpi ptSize "M"
-      cellW = max 1 (ceiling (_xMax bbox))
-      ascent = _yMax bbox
-      -- Cell height includes some line spacing (ascent + ~20% for descenders/spacing)
-      cellH = max 1 (ceiling (ascent * 1.25))
-  in (cellW, cellH, ascent)
+colorToRGB :: Color -> RGB -> RGB
+colorToRGB Default     def = def
+colorToRGB (RGB r g b) _   = hexRGB r g b
 
--- | Convert pixel size to PointSize at a given DPI.
-pixelSizeInPointAtDpi :: Float -> Int -> PointSize
-pixelSizeInPointAtDpi px dpi = PointSize (px * 72.0 / fromIntegral dpi)
+-- | Render a CellGrid to a PNG image as lazy ByteString.
+renderPNG :: PNGConfig -> CellGrid -> IO LBS.ByteString
+renderPNG config grid = do
+  let fontSize = fromIntegral (pngFontSize config) :: Double
 
--- | Render the full image.
-renderImage :: PNGConfig -> Font -> CellGrid -> Image PixelRGBA8
-renderImage config font grid =
-  let fontSize  = pngFontSize config
-      (cellW, cellH, ascent) = cellDimensions font fontSize
-      cols      = gridWidth grid
-      rows      = gridHeight grid
-      termW     = cols * cellW
-      termH     = rows * cellH
-      chrome    = if pngTitleBar config then titleBarHeight else 0
-      pad       = pngPadding config
-      -- Window includes inner padding around terminal content
+  -- Get font metrics using a temporary surface
+  (cellW, cellH, asc) <- withImageSurface FormatARGB32 1 1 $ \tmpSurf ->
+    renderWith tmpSurf $ do
+      selectFontFace (pngFontFamily config) FontSlantNormal FontWeightNormal
+      setFontSize fontSize
+      fe <- fontExtents
+      te <- textExtents "M"
+      let cw  = max 1 (ceiling (textExtentsXadvance te) :: Int)
+          a   = fontExtentsAscent fe
+          d   = fontExtentsDescent fe
+          ch  = max 1 (ceiling (a + d) :: Int)
+      pure (cw, ch, a)
+
+  let cols = gridWidth grid
+      rows = gridHeight grid
+      termW = cols * cellW
+      termH = rows * cellH
+      chrome = if pngTitleBar config then titleBarHeight else 0
+      pad = pngPadding config
       winContentW = termW + 2 * innerPadX
       winContentH = termH + chrome + innerPadTop + innerPadBottom
-      imgW      = winContentW + 2 * pad
-      imgH      = winContentH + 2 * pad
-      dpi       = 96
-      ptSize    = pixelSizeInPointAtDpi (fromIntegral fontSize) dpi
-  in renderDrawing imgW imgH bodyColor $ do
-       let winX = fromIntegral pad
-           winY = fromIntegral pad
-           winW = fromIntegral winContentW
-           winH = fromIntegral winContentH
+      imgW = winContentW + 2 * pad
+      imgH = winContentH + 2 * pad
 
-       -- Window border (rounded rectangle outline)
-       drawBorderRect (winX - 1) (winY - 1) (winW + 2) (winH + 2) (frameRadius + 1) borderColor
+  withImageSurface FormatARGB32 imgW imgH $ \surface -> do
+    renderWith surface $ do
+      -- Body background
+      setRGB bodyRGB
+      paint
 
-       -- Window background
-       drawFilledRoundedRect winX winY winW winH frameRadius bgColor
+      let wx = fromIntegral pad
+          wy = fromIntegral pad
+          ww = fromIntegral winContentW
+          wh = fromIntegral winContentH
 
-       -- Title bar
-       when (pngTitleBar config) $ do
-         let tbH = fromIntegral chrome
-         -- Title bar background (top rounded, bottom square)
-         drawFilledRoundedRect winX winY winW tbH frameRadius titleBarColor
-         -- Square off the bottom of title bar
-         drawFilledRect winX (winY + tbH - frameRadius) winW frameRadius titleBarColor
+      -- Window border
+      setRGB borderRGB
+      setLineWidth 1
+      roundedRect (wx - 1) (wy - 1) (ww + 2) (wh + 2) (frameRadius + 1)
+      stroke
 
-         -- Traffic lights
-         let btnCY = winY + tbH / 2
-         drawCircleFilled (winX + 18) btnCY 7 trafficRed
-         drawCircleFilled (winX + 38) btnCY 7 trafficYellow
-         drawCircleFilled (winX + 58) btnCY 7 trafficGreen
+      -- Window background
+      setRGB bgRGB
+      roundedRect wx wy ww wh frameRadius
+      fill
 
-         -- Title text (centered)
-         withTexture (uniformTexture titleTextColor) $
-           printTextAt font (toPointSize (fromIntegral fontSize - 2) dpi) (V2 (winX + winW / 2 - estimateTextWidth font (fromIntegral fontSize - 2) (pngWindowTitle config) / 2) (winY + 11)) (pngWindowTitle config)
+      -- Title bar
+      when (pngTitleBar config) $ do
+        let tbH = fromIntegral chrome
 
-       -- Terminal content (offset by inner padding)
-       let contentX = winX + fromIntegral innerPadX
-           contentY = winY + fromIntegral chrome + fromIntegral innerPadTop
-       drawCells font grid contentX contentY cellW cellH ascent ptSize
+        -- Title bar background (top rounded, bottom square)
+        setRGB titleBarRGB
+        roundedRect wx wy ww tbH frameRadius
+        fill
+        -- Square off the bottom of title bar
+        rectangle wx (wy + tbH - frameRadius) ww frameRadius
+        fill
 
--- | Draw all cells from the grid.
-drawCells :: Font -> CellGrid -> Float -> Float -> Int -> Int -> Float -> PointSize -> Drawing PixelRGBA8 ()
-drawCells font grid originX originY cellW cellH textAscent ptSize = do
-  let rows = gridRows grid
-      cw = fromIntegral cellW
-      ch = fromIntegral cellH
-  V.iforM_ rows $ \rowIdx row ->
-    V.iforM_ row $ \colIdx cell -> do
-      let x = originX + fromIntegral colIdx * cw
-          y = originY + fromIntegral rowIdx * ch
+        -- Traffic lights
+        let btnCY = wy + tbH / 2
+        filledCircle (wx + 18) btnCY 7 trafficRedRGB
+        filledCircle (wx + 38) btnCY 7 trafficYellowRGB
+        filledCircle (wx + 58) btnCY 7 trafficGreenRGB
 
-      -- Background
-      let bg = cellBgPixel (cellBg cell)
-      drawFilledRect x y cw ch bg
+        -- Title text (centered)
+        selectFontFace (pngFontFamily config) FontSlantNormal FontWeightNormal
+        setFontSize (fontSize - 2)
+        fe <- fontExtents
+        te <- textExtents (pngWindowTitle config)
+        let titleW = textExtentsXadvance te
+            titleAsc = fontExtentsAscent fe
+            titleDesc = fontExtentsDescent fe
+        setRGB titleTextRGB
+        moveTo (wx + ww / 2 - titleW / 2) (wy + tbH / 2 + (titleAsc - titleDesc) / 2)
+        showText (pngWindowTitle config)
 
-      -- Foreground character (offset by ascent for proper baseline positioning)
-      when (cellChar cell /= ' ') $ do
-        let fg = cellFgPixel (cellFg cell)
-        withTexture (uniformTexture fg) $
-          printTextAt font ptSize (V2 x (y + textAscent)) [cellChar cell]
+      -- Terminal content
+      let cx = wx + fromIntegral innerPadX
+          cy = wy + fromIntegral chrome + fromIntegral innerPadTop
+          cw = fromIntegral cellW
+          ch = fromIntegral cellH
 
--- | Convert a Cell Color to PixelRGBA8 for foreground.
-cellFgPixel :: Color -> PixelRGBA8
-cellFgPixel Default       = fgColor
-cellFgPixel (RGB r g b)   = PixelRGBA8 r g b 255
+      selectFontFace (pngFontFamily config) FontSlantNormal FontWeightNormal
+      setFontSize fontSize
 
--- | Convert a Cell Color to PixelRGBA8 for background.
-cellBgPixel :: Color -> PixelRGBA8
-cellBgPixel Default       = bgColor
-cellBgPixel (RGB r g b)   = PixelRGBA8 r g b 255
+      V.iforM_ (gridRows grid) $ \rowIdx row ->
+        V.iforM_ row $ \colIdx cell -> do
+          let x = cx + fromIntegral colIdx * cw
+              y = cy + fromIntegral rowIdx * ch
+
+          -- Background
+          let (br, bg', bb) = colorToRGB (cellBg cell) bgRGB
+          setSourceRGB br bg' bb
+          rectangle x y cw ch
+          fill
+
+          -- Foreground character
+          when (cellChar cell /= ' ') $ do
+            let (fr, fg', fb) = colorToRGB (cellFg cell) fgRGB
+            setSourceRGB fr fg' fb
+            moveTo x (y + asc)
+            showText [cellChar cell]
+
+    -- Write PNG to temp file and read back
+    (tmpPath, h) <- openTempFile "/tmp" "tank-png-.png"
+    hClose h
+    surfaceWriteToPNG surface tmpPath
+    bs <- LBS.readFile tmpPath
+    removeFile tmpPath
+    pure bs
+
+-- | Conditional rendering.
+when :: Bool -> Render () -> Render ()
+when True  act = act
+when False _   = pure ()
 
 -- Drawing helpers
 
-drawFilledRect :: Float -> Float -> Float -> Float -> PixelRGBA8 -> Drawing PixelRGBA8 ()
-drawFilledRect x y w h color =
-  withTexture (uniformTexture color) $
-    fill $ rectangle (V2 x y) w h
+roundedRect :: Double -> Double -> Double -> Double -> Double -> Render ()
+roundedRect x y w h r = do
+  newPath
+  arc (x + w - r) (y + r)     r (-pi/2) 0
+  arc (x + w - r) (y + h - r) r 0        (pi/2)
+  arc (x + r)     (y + h - r) r (pi/2)   pi
+  arc (x + r)     (y + r)     r pi        (3*pi/2)
+  closePath
 
-drawFilledRoundedRect :: Float -> Float -> Float -> Float -> Float -> PixelRGBA8 -> Drawing PixelRGBA8 ()
-drawFilledRoundedRect x y w h r color =
-  withTexture (uniformTexture color) $
-    fill $ roundedRectangle (V2 x y) w h r r
-
-drawBorderRect :: Float -> Float -> Float -> Float -> Float -> PixelRGBA8 -> Drawing PixelRGBA8 ()
-drawBorderRect x y w h r color =
-  withTexture (uniformTexture color) $
-    stroke 1 JoinRound (CapRound, CapRound) $
-      roundedRectangle (V2 x y) w h r r
-
-drawCircleFilled :: Float -> Float -> Float -> PixelRGBA8 -> Drawing PixelRGBA8 ()
-drawCircleFilled cx cy r color =
-  withTexture (uniformTexture color) $
-    fill $ circle (V2 cx cy) r
-
--- | Convert pixel size to PointSize for Rasterific.
-toPointSize :: Float -> Int -> PointSize
-toPointSize px dpi = PointSize (px * 72.0 / fromIntegral dpi)
-
--- | Rough estimate of text width for centering.
-estimateTextWidth :: Font -> Float -> String -> Float
-estimateTextWidth font fontSize str =
-  let dpi = 96
-      ptSize = pixelSizeInPointAtDpi fontSize dpi
-      bbox = stringBoundingBox font dpi ptSize str
-  in _xMax bbox
-
--- | Conditional drawing.
-when :: Bool -> Drawing px () -> Drawing px ()
-when True  act = act
-when False _   = pure ()
+filledCircle :: Double -> Double -> Double -> RGB -> Render ()
+filledCircle cx cy r color = do
+  setRGB color
+  newPath
+  arc cx cy r 0 (2 * pi)
+  fill
