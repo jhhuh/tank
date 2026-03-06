@@ -139,12 +139,19 @@ drawBorder grid (Rect rx ry rw rh) bs bc title_
                      g6 [ry+1 .. ry+rh-2]
           g8 = foldl (\g r -> setCell g (rx+rw-1) r (mkC vert))
                      g7 [ry+1 .. ry+rh-2]
-          -- Title on top border
+          -- Title on top border (left title)
           g9 = case title_ of
             Just (t, _) | not (T.null t) ->
               stampText g8 (rx + 2) ry bc Default t
             _ -> g8
-      in g9
+          -- Right hint title on top border
+          g10 = case title_ of
+            Just (_, hint) | not (T.null hint) ->
+              let hintLen = T.length hint
+                  hintX = rx + rw - 2 - hintLen
+              in stampText g9 hintX ry bc Default hint
+            _ -> g9
+      in g10
 
 -- | Get the box-drawing characters for a border style.
 -- Returns: (top-left, top-right, bottom-left, bottom-right, horizontal, vertical)
@@ -156,12 +163,7 @@ borderChars Heavy   = ('\x250F', '\x2513', '\x2517', '\x251B', '\x2501', '\x2503
 -- | Stamp content into a rect.
 stampContent :: CellGrid -> Rect -> Content -> CellGrid
 stampContent grid (Rect rx ry rw rh) (Text spans_) =
-  let lines_ = spansToLines spans_
-  in foldl (\g (row, line) ->
-        if row < rh
-        then stampLine g rx (ry + row) rw line
-        else g
-      ) grid (zip [0..] lines_)
+  stampSpans grid rx ry rw rh spans_
 stampContent grid (Rect rx ry rw rh) (Fill ch fg) =
   fillRect grid (Rect rx ry rw rh) ch fg Default
 stampContent grid (Rect rx ry rw rh) (CellContent src) =
@@ -173,15 +175,34 @@ stampContent grid (Rect rx ry rw rh) (CellContent src) =
            grid
            [(c, r) | r <- [0 .. copyH - 1], c <- [0 .. copyW - 1]]
 
+-- | Stamp styled spans into the grid, preserving per-span colors.
+-- Handles newlines within span text for multi-line content.
+stampSpans :: CellGrid -> Int -> Int -> Int -> Int -> [Span] -> CellGrid
+stampSpans grid startX startY maxW maxH spans_ =
+  let -- Flatten spans into styled characters, tracking line breaks
+      go g _col _row [] = g
+      go g _col _row _ | _row >= maxH = g
+      go g col row (Span txt style : rest) =
+        let fg = case spanFg style of
+              Just c  -> c
+              Nothing -> Default
+            bold = spanBold style
+            dim_ = spanDim style
+            (g', col', row') = T.foldl' (stepChar fg bold dim_) (g, col, row) txt
+        in go g' col' row' rest
+      stepChar fg bold dim_ (g, col, row) ch
+        | row >= maxH = (g, col, row)
+        | ch == '\n'  = (g, 0, row + 1)
+        | col >= maxW = (g, col + 1, row)  -- clip but keep scanning
+        | otherwise   =
+            ( setCell g (startX + col) (startY + row)
+                (Cell ch fg Default bold dim_)
+            , col + 1, row)
+  in go grid 0 0 spans_
+
 -- | Convert a list of spans into lines, splitting on newlines.
+-- Used for size estimation in layoutSize.
 spansToLines :: [Span] -> [Text]
 spansToLines spans_ =
   let fullText = T.concat [t | Span t _ <- spans_]
   in T.splitOn "\n" fullText
-
--- | Stamp a single line of text from spans into the grid at (x, y),
--- clipping to maxW columns. Uses default colors for plain text.
-stampLine :: CellGrid -> Int -> Int -> Int -> Text -> CellGrid
-stampLine grid x y maxW line =
-  let clipped = T.take maxW line
-  in stampText grid x y Default Default clipped
