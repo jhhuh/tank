@@ -25,6 +25,7 @@ library
     Tank.Daemon.Socket
     Tank.Daemon.Router
     Tank.Daemon.State
+    Tank.Plug.Client
     Tank.Plug.Terminal
     Tank.Plug.Operator
     Tank.Plug.Operator.Overlay
@@ -98,6 +99,7 @@ test-suite tank-tests
     Tank.Terminal.CellAdapterSpec
     Tank.Daemon.IntegrationSpec
     Tank.Daemon.RouterSpec
+    Tank.Plug.ClientSpec
   build-depends:
     , base         >= 4.17 && < 5
     , tank
