@@ -40,8 +40,12 @@ import Tank.Plug.Operator.Overlay
   , newOverlayState, renderOverlay, handleOverlayKey
   , addMessage, setStatus
   )
-import Tank.Core.Types (CellId(..))
-import Tank.Plug.Client (PlugClient)
+import qualified Data.Set as Set
+import Data.UUID.V4 (nextRandom)
+import Tank.Core.Types (CellId(..), PlugCapability(..))
+import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
+import Tank.Plug.Client (PlugClient, connectDaemon, sendMsg, disconnectPlug, pcPlugId)
+import Tank.Daemon.Socket (socketPath)
 import Tank.Terminal.Emulator
   ( VTerm, mkVTerm, vtFeed, vtResize, vtGetCell, vtGetCursor, vtGetSize
   , Cell(..), Attrs(..), Color(..), defaultAttrs, defaultCell
@@ -148,6 +152,15 @@ runTerminalPlug = do
         , tsDaemon     = daemonRef
         }
 
+    -- Try connecting to daemon (optional — works standalone if not running)
+    daemonSockPath <- socketPath "default"
+    mClient <- connectDaemon daemonSockPath "terminal" (Set.singleton CapTerminal)
+    writeIORef (tsDaemon ts) mClient
+    case mClient of
+      Just client -> hPutStrLn stderr $
+        "tank: connected to daemon as " ++ show (pcPlugId client)
+      Nothing -> hPutStrLn stderr "tank: running standalone (no daemon)"
+
     void $ installHandler windowChange (Catch $ handleResizeAll ts) Nothing
 
     -- Create first window with one pane
@@ -157,6 +170,12 @@ runTerminalPlug = do
     hFlush stdout
 
     inputLoop ts `finally` do
+      -- Disconnect from daemon
+      mClient' <- readIORef (tsDaemon ts)
+      case mClient' of
+        Just client' -> disconnectPlug client'
+        Nothing -> pure ()
+      -- Restore terminal
       (_, finalRows) <- getTermSize
       BS.hPut stdout $ BS8.pack $
         "\x1b[r\x1b[" ++ show (finalRows + 1) ++ ";1H\x1b[2K"
@@ -172,7 +191,22 @@ createPane ts cols rows = do
   pOvRef   <- newIORef newOverlayState
   pAgRef   <- newIORef =<< newAgentState
   pVtRef   <- newIORef (mkVTerm cols rows)
-  let pane = Pane pty pRunRef pOvRef pAgRef pVtRef Nothing
+
+  -- Generate CellId if connected to daemon
+  mClient <- readIORef (tsDaemon ts)
+  mCid <- case mClient of
+    Nothing -> pure Nothing
+    Just client -> do
+      cuid <- nextRandom
+      let cid = CellId cuid
+          pid = pcPlugId client
+      sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+        (MsgCellCreate cid ".")
+      sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+        (MsgCellAttach cid pid)
+      pure (Just cid)
+
+  let pane = Pane pty pRunRef pOvRef pAgRef pVtRef mCid
   modifyIORef' (tsPanes ts) (IM.insert paneId pane)
   -- PTY reader thread
   void $ forkIO $ paneReaderThread ts pane paneId
