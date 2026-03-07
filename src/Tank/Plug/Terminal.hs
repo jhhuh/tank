@@ -40,6 +40,8 @@ import Tank.Plug.Operator.Overlay
   , newOverlayState, renderOverlay, handleOverlayKey
   , addMessage, setStatus
   )
+import Tank.Core.Types (CellId(..))
+import Tank.Plug.Client (PlugClient)
 import Tank.Terminal.Emulator
   ( VTerm, mkVTerm, vtFeed, vtResize, vtGetCell, vtGetCursor, vtGetSize
   , Cell(..), Attrs(..), Color(..), defaultAttrs, defaultCell
@@ -61,6 +63,7 @@ data Pane = Pane
   , pOverlay :: !(IORef OverlayState)
   , pAgent   :: !(IORef AgentState)
   , pVTerm   :: !(IORef VTerm)
+  , pCellId  :: !(Maybe CellId)
   }
 
 -- | How panes are arranged within a window.
@@ -90,6 +93,7 @@ data TermState = TermState
   , tsCols      :: !(IORef Int)
   , tsShell     :: !String
   , tsCopyScroll :: !(IORef Int)  -- 0 = normal, >0 = copy mode scroll offset
+  , tsDaemon     :: !(IORef (Maybe PlugClient))
   }
 
 -- | Run the terminal UI plug
@@ -129,6 +133,7 @@ runTerminalPlug = do
       prefixRef  <- newIORef False
       colsRef    <- newIORef cols
       copyRef    <- newIORef 0
+      daemonRef  <- newIORef Nothing
       pure TermState
         { tsPanes      = panesRef
         , tsWindows    = windowsRef
@@ -140,6 +145,7 @@ runTerminalPlug = do
         , tsCols       = colsRef
         , tsShell      = shell
         , tsCopyScroll = copyRef
+        , tsDaemon     = daemonRef
         }
 
     void $ installHandler windowChange (Catch $ handleResizeAll ts) Nothing
@@ -166,7 +172,7 @@ createPane ts cols rows = do
   pOvRef   <- newIORef newOverlayState
   pAgRef   <- newIORef =<< newAgentState
   pVtRef   <- newIORef (mkVTerm cols rows)
-  let pane = Pane pty pRunRef pOvRef pAgRef pVtRef
+  let pane = Pane pty pRunRef pOvRef pAgRef pVtRef Nothing
   modifyIORef' (tsPanes ts) (IM.insert paneId pane)
   -- PTY reader thread
   void $ forkIO $ paneReaderThread ts pane paneId
