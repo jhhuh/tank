@@ -44,7 +44,7 @@ import qualified Data.Set as Set
 import Data.UUID.V4 (nextRandom)
 import Tank.Core.Types (CellId(..), PlugCapability(..))
 import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
-import Tank.Plug.Client (PlugClient, connectDaemon, sendMsg, disconnectPlug, pcPlugId)
+import Tank.Plug.Client (PlugClient, connectDaemon, sendMsg, recvMsg, disconnectPlug, pcPlugId)
 import Tank.Daemon.Socket (socketPath)
 import Tank.Terminal.Emulator
   ( VTerm, mkVTerm, vtFeed, vtResize, vtGetCell, vtGetCursor, vtGetSize
@@ -157,8 +157,9 @@ runTerminalPlug = do
     mClient <- connectDaemon daemonSockPath "terminal" (Set.singleton CapTerminal)
     writeIORef (tsDaemon ts) mClient
     case mClient of
-      Just client -> hPutStrLn stderr $
-        "tank: connected to daemon as " ++ show (pcPlugId client)
+      Just client -> do
+        hPutStrLn stderr $ "tank: connected to daemon as " ++ show (pcPlugId client)
+        void $ forkIO $ daemonReaderThread ts client
       Nothing -> hPutStrLn stderr "tank: running standalone (no daemon)"
 
     void $ installHandler windowChange (Catch $ handleResizeAll ts) Nothing
@@ -315,6 +316,17 @@ paneReaderThread ts pane paneId = do
             unless (BS.null bs) $ do
               -- Update virtual screen
               modifyIORef' (pVTerm pane) (vtFeed bs)
+              -- Forward to daemon for other plugs
+              case pCellId pane of
+                Nothing -> pure ()
+                Just cid -> do
+                  mClient <- readIORef (tsDaemon ts)
+                  case mClient of
+                    Nothing -> pure ()
+                    Just client -> do
+                      let pid = pcPlugId client
+                      sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+                            (MsgOutput cid bs)
               -- Check if this pane is visible and active
               mwin <- getActiveWindow ts
               case mwin of
@@ -333,6 +345,30 @@ paneReaderThread ts pane paneId = do
                       -- Multi-pane: render this pane from VTerm
                       renderSinglePane ts pane paneId
             go fd'
+
+-- | Background thread reading messages from the daemon.
+-- Handles MsgInput from remote sources by writing to the appropriate PTY.
+daemonReaderThread :: TermState -> PlugClient -> IO ()
+daemonReaderThread ts client = go
+  where
+    go = do
+      alive <- readIORef (tsRunning ts)
+      when alive $ do
+        result <- recvMsg client
+        case result of
+          Left _err -> pure ()  -- daemon disconnected, stop thread
+          Right env -> do
+            case mePayload env of
+              MsgInput _cid bytes -> do
+                -- Find pane with matching CellId and write to its PTY
+                panes <- readIORef (tsPanes ts)
+                let matching = [ p | p <- IM.elems panes
+                               , pCellId p == Just _cid ]
+                case matching of
+                  (pane:_) -> writePty (pPty pane) bytes
+                  []       -> pure ()
+              _ -> pure ()  -- ignore other messages for now
+            go
 
 -- | Check if a pane id is in a layout
 layoutContains :: Int -> PaneLayout -> Bool
@@ -355,6 +391,19 @@ paneProcessWatcher ts paneId ph = do
       writeIORef (pRunning pane) False
       threadDelay 50000
       modifyIORef' (tsPanes ts) (IM.delete paneId)
+      -- Notify daemon about cell destruction
+      case pCellId pane of
+        Nothing -> pure ()
+        Just cid -> do
+          mClient <- readIORef (tsDaemon ts)
+          case mClient of
+            Nothing -> pure ()
+            Just client -> do
+              let pid = pcPlugId client
+              sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+                (MsgCellDetach cid pid)
+              sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+                (MsgCellDestroy cid)
       -- Remove pane from its window layout
       windows <- readIORef (tsWindows ts)
       forM_ (IM.toList windows) $ \(winId, win) -> do
