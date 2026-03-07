@@ -6,15 +6,18 @@ module Tank.Daemon.Main
   , stopDaemon
   ) where
 
-import Control.Concurrent (forkFinally)
+import Control.Concurrent (forkFinally, threadDelay)
 import Control.Concurrent.STM (atomically)
 import Control.Exception (bracket, IOException, try)
-import Control.Monad (forM_)
+import Control.Monad (forM_, when)
 import Data.UUID (nil)
 import qualified Data.Set as Set
 import Network.Socket (Socket, accept, close)
-import System.Directory (removeFile)
+import System.Directory (doesFileExist, removeFile)
+import System.FilePath (replaceExtension)
 import System.IO (Handle, hClose, hPutStrLn, stderr)
+import System.Posix.Process (getProcessID)
+import System.Posix.Signals (signalProcess, sigTERM)
 import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
 import Tank.Core.Types (PlugId(..))
 import Tank.Daemon.Router (RouteAction(..), routeMessage)
@@ -31,12 +34,17 @@ startDaemon name = do
 startDaemonAt :: FilePath -> IO ()
 startDaemonAt path = do
   hPutStrLn stderr $ "tank: starting daemon on " ++ path
+  let pidPath = replaceExtension path ".pid"
+  pid <- getProcessID
+  writeFile pidPath (show pid)
   state <- newDaemonState
-  bracket (listenSocket path) (cleanup path) (acceptLoop state)
+  bracket (listenSocket path) (cleanup path pidPath) (acceptLoop state)
   where
-    cleanup p sock = do
+    cleanup p pp sock = do
       close sock
       removeFile p
+      pidExists <- doesFileExist pp
+      when pidExists $ removeFile pp
 
 -- | Accept client connections, spawning a handler thread per client
 acceptLoop :: DaemonState -> Socket -> IO ()
@@ -96,9 +104,22 @@ makeResponse req payload = MessageEnvelope
   , mePayload  = payload
   }
 
--- | Stop the daemon
+-- | Stop the daemon by sending SIGTERM to the daemon process.
+-- Reads the PID from the .pid file written by startDaemon.
 stopDaemon :: String -> IO ()
 stopDaemon name = do
   path <- socketPath name
-  -- TODO: send shutdown message to daemon
-  hPutStrLn stderr $ "tank: stopping daemon at " ++ path
+  let pidPath = replaceExtension path ".pid"
+  pidExists <- doesFileExist pidPath
+  if not pidExists
+    then hPutStrLn stderr "tank: no daemon running (no pid file)"
+    else do
+      pidStr <- readFile pidPath
+      let pid = read pidStr
+      hPutStrLn stderr $ "tank: stopping daemon (pid " ++ show pid ++ ")"
+      result <- try (signalProcess sigTERM pid) :: IO (Either IOException ())
+      case result of
+        Left _ -> hPutStrLn stderr "tank: daemon process not found (already stopped?)"
+        Right () -> do
+          threadDelay 100000  -- 100ms for cleanup
+          hPutStrLn stderr "tank: daemon stopped"
