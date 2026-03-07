@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Tank.Plug.Terminal
   ( runTerminalPlug
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (bracket_, finally, SomeException, try)
+import Control.Exception (IOException, bracket_, finally, SomeException, try)
 import Control.Monad (void, when, unless, forM_)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -316,7 +317,7 @@ paneReaderThread ts pane paneId = do
             unless (BS.null bs) $ do
               -- Update virtual screen
               modifyIORef' (pVTerm pane) (vtFeed bs)
-              -- Forward to daemon for other plugs
+              -- Forward to daemon for other plugs (tolerate errors)
               case pCellId pane of
                 Nothing -> pure ()
                 Just cid -> do
@@ -325,8 +326,9 @@ paneReaderThread ts pane paneId = do
                     Nothing -> pure ()
                     Just client -> do
                       let pid = pcPlugId client
-                      sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
-                            (MsgOutput cid bs)
+                      _ <- try (sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+                            (MsgOutput cid bs)) :: IO (Either IOException ())
+                      pure ()
               -- Check if this pane is visible and active
               mwin <- getActiveWindow ts
               case mwin of
@@ -356,14 +358,16 @@ daemonReaderThread ts client = go
       when alive $ do
         result <- recvMsg client
         case result of
-          Left _err -> pure ()  -- daemon disconnected, stop thread
+          Left _err -> do
+            writeIORef (tsDaemon ts) Nothing
+            hPutStrLn stderr "tank: daemon connection lost"
           Right env -> do
             case mePayload env of
-              MsgInput _cid bytes -> do
+              MsgInput cid bytes -> do
                 -- Find pane with matching CellId and write to its PTY
                 panes <- readIORef (tsPanes ts)
                 let matching = [ p | p <- IM.elems panes
-                               , pCellId p == Just _cid ]
+                               , pCellId p == Just cid ]
                 case matching of
                   (pane:_) -> writePty (pPty pane) bytes
                   []       -> pure ()
@@ -391,7 +395,7 @@ paneProcessWatcher ts paneId ph = do
       writeIORef (pRunning pane) False
       threadDelay 50000
       modifyIORef' (tsPanes ts) (IM.delete paneId)
-      -- Notify daemon about cell destruction
+      -- Notify daemon about cell destruction (tolerate errors)
       case pCellId pane of
         Nothing -> pure ()
         Just cid -> do
@@ -400,10 +404,12 @@ paneProcessWatcher ts paneId ph = do
             Nothing -> pure ()
             Just client -> do
               let pid = pcPlugId client
-              sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
-                (MsgCellDetach cid pid)
-              sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
-                (MsgCellDestroy cid)
+              _ <- try (do
+                sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+                  (MsgCellDetach cid pid)
+                sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+                  (MsgCellDestroy cid)) :: IO (Either IOException ())
+              pure ()
       -- Remove pane from its window layout
       windows <- readIORef (tsWindows ts)
       forM_ (IM.toList windows) $ \(winId, win) -> do
