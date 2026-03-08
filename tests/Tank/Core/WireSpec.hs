@@ -9,7 +9,7 @@ import Tank.Core.CRDT (ReplicaId(..))
 import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
 import Tank.Core.Types (CellId(..), PlugId(..), PlugCapability(..), PlugInfo(..), GridDelta(..), CellUpdate(..), ViewportUpdate(..), EpochUpdate(..), GridSnapshot(..))
 import Tank.Core.Wire (toWire, fromWire)
-import Tank.Terminal.Grid (GridCell(..), Color(..), defaultAttrs, defaultCell)
+import Tank.Terminal.Grid (GridCell(..), Color(..), CellAttrs(..), defaultAttrs, defaultCell)
 
 -- | Helper: wrap a message in an envelope for round-trip testing.
 mkEnvelope :: Message -> MessageEnvelope
@@ -140,4 +140,21 @@ spec = describe "Wire round-trip" $ do
                 , gsCells       = [cu]
                 }
         msg = MsgStateUpdate (CellId nil) (DeltaSnapshot snap)
+    roundTrip msg `shouldBe` Right (mkEnvelope msg)
+
+  it "MsgStateUpdate with ColorRGB and blink/dim attrs" $ do
+    let attrs = CellAttrs True False True False True True  -- bold, underline, blink, dim
+        cu = CellUpdate
+              { cuAbsLine   = 0
+              , cuCol       = 0
+              , cuCell      = GridCell 'Z' (ColorRGB 255 128 0) (ColorRGB 0 0 0) attrs
+              , cuEpoch     = 5
+              , cuTimestamp = 999
+              , cuReplicaId = ReplicaId nil
+              }
+        msg = MsgStateUpdate (CellId nil) (DeltaCells [cu])
+    roundTrip msg `shouldBe` Right (mkEnvelope msg)
+
+  it "MsgStateUpdate with empty cells list" $ do
+    let msg = MsgStateUpdate (CellId nil) (DeltaCells [])
     roundTrip msg `shouldBe` Right (mkEnvelope msg)
