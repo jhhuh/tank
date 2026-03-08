@@ -91,8 +91,9 @@ routeMessage ds handle envelope = case mePayload envelope of
   MsgOutput cid bytes -> do
     pure [Broadcast cid (MsgOutput cid bytes)]
 
-  -- State sync (deferred)
-  MsgStateUpdate _cid _delta -> pure []
+  -- State sync
+  MsgStateUpdate cid delta ->
+    pure [Broadcast cid (MsgStateUpdate cid delta)]
 
   -- Response messages shouldn't arrive at router
   MsgPlugRegistered _ -> pure []

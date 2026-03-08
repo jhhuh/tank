@@ -8,6 +8,7 @@ import qualified Data.Set as Set
 import Control.Concurrent.STM
 import System.IO (stdin)
 
+import Tank.Core.CRDT (ReplicaId(..))
 import Tank.Core.Types
 import Tank.Core.Protocol
 import Tank.Daemon.State
@@ -110,3 +111,10 @@ spec = describe "Router" $ do
     let cid = CellId nil
     result <- routeMessage ds stdin (mkEnvelope (MsgInput cid "hello"))
     result `shouldBe` []
+
+  it "routes MsgStateUpdate as broadcast" $ do
+    ds <- newDaemonState
+    let cid = CellId nil
+        delta = DeltaViewport (ViewportUpdate 10 100 (ReplicaId nil))
+    result <- routeMessage ds stdin (mkEnvelope (MsgStateUpdate cid delta))
+    result `shouldBe` [Broadcast cid (MsgStateUpdate cid delta)]
