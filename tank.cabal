@@ -65,9 +65,12 @@ executable tank
   main-is:          Main.hs
   ghc-options:      -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-    , base  >= 4.17 && < 5
+    , base        >= 4.17 && < 5
     , tank
-    , text  >= 2.0  && < 3
+    , bytestring  >= 0.11 && < 1
+    , containers  >= 0.6  && < 1
+    , uuid        >= 1.3  && < 2
+    , text        >= 2.0  && < 3
   hs-source-dirs:   app
   default-language: GHC2021
 
@@ -100,6 +103,7 @@ test-suite tank-tests
     Tank.Daemon.IntegrationSpec
     Tank.Daemon.RouterSpec
     Tank.Plug.ClientSpec
+    Tank.Layout.RenderSpec
   build-depends:
     , base         >= 4.17 && < 5
     , tank

@@ -59,12 +59,18 @@ routeMessage ds handle envelope = case mePayload envelope of
     pure []
 
   MsgCellAttach cid pid -> do
-    atomically $ do
+    mOwner <- atomically $ do
       mcell <- getCell ds cid
       case mcell of
-        Nothing -> pure ()
-        Just cell -> addCell ds cell { cellPlugs = Set.insert pid (cellPlugs cell) }
-    pure []
+        Nothing -> pure Nothing
+        Just cell -> do
+          addCell ds cell { cellPlugs = Set.insert pid (cellPlugs cell) }
+          pure (cellPtyOwner cell)
+    -- Notify PTY owner so it can send a snapshot to the new plug
+    case mOwner of
+      Just owner | owner /= meSource envelope ->
+        pure [SendTo owner (MsgCellAttach cid pid)]
+      _ -> pure []
 
   MsgCellDetach cid pid -> do
     atomically $ do
@@ -98,5 +104,10 @@ routeMessage ds handle envelope = case mePayload envelope of
   -- Response messages shouldn't arrive at router
   MsgPlugRegistered _ -> pure []
   MsgListCellsResponse _ -> pure []
-  MsgFetchLines {} -> pure []
+  MsgFetchLines cid _from _to -> do
+    mcell <- atomically $ getCell ds cid
+    case mcell of
+      Just cell | Just owner <- cellPtyOwner cell ->
+        pure [SendTo owner (mePayload envelope)]
+      _ -> pure []
   MsgFetchLinesResponse _ _ -> pure []

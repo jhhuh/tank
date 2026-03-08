@@ -9,7 +9,8 @@ module Tank.Plug.Operator
   , ProgressCallback
   ) where
 
-import Control.Monad (forM_)
+import Control.Concurrent (forkIO)
+import Control.Monad (forM_, void)
 import qualified Control.Exception as E
 import Data.Aeson (Value(..), object, (.=))
 import qualified Data.Aeson as Aeson
@@ -20,12 +21,18 @@ import qualified Data.Text.Encoding as TE
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import Data.IORef
+import qualified Data.Set as Set
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory (getCurrentDirectory)
 import System.Environment (lookupEnv)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hPutStrLn, stderr, hFlush, stdout)
 
+import Tank.Core.Types (PlugCapability(..))
+import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
+import Tank.Daemon.Socket (socketPath)
+import Tank.Plug.Client (PlugClient(..), connectDaemon, sendMsg, recvMsg, disconnectPlug)
 import Tank.Plug.Operator.Tools (readFileTool, writeFileTool, executeTool, grepTool)
 
 -- | Agent state. Messages are stored as raw JSON Values so that
@@ -332,20 +339,75 @@ dispatchTool workDir "grep" (Object input) =
 dispatchTool _ name _ =
   pure $ Left $ "Unknown tool: " <> name
 
--- | Run the operator plug (standalone mode — for testing)
+-- | Run the operator plug. Connects to daemon if available, otherwise standalone.
 runOperatorPlug :: IO ()
 runOperatorPlug = do
   state <- newAgentState
   workDir <- getCurrentDirectory
-  hPutStrLn stderr "tank operator: ready (type a message, Ctrl-D to quit)"
-  loop state workDir
+
+  -- Try connecting to daemon
+  sockPath <- socketPath "default"
+  mClient <- connectDaemon sockPath "operator" (Set.singleton CapOperator)
+  case mClient of
+    Nothing -> do
+      hPutStrLn stderr "tank operator: standalone mode (no daemon)"
+      replLoop state workDir Nothing
+    Just client -> do
+      hPutStrLn stderr $ "tank operator: connected as " ++ show (pcPlugId client)
+      -- Query cells and attach to first one if available
+      let pid = pcPlugId client
+      sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0 MsgListCells
+      resp <- recvMsg client
+      case resp of
+        Right env | MsgListCellsResponse ((cid, dir):_) <- mePayload env -> do
+          hPutStrLn stderr $ "tank operator: attaching to cell " ++ show cid ++ " in " ++ dir
+          sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
+            (MsgCellAttach cid pid)
+          -- Background thread: receive daemon messages (MsgOutput, etc.)
+          screenRef <- newIORef ""
+          void $ forkIO $ operatorDaemonReader client screenRef
+          replLoop state dir (Just screenRef)
+        _ -> do
+          hPutStrLn stderr "tank operator: no cells found, running standalone"
+          replLoop state workDir Nothing
+
+      disconnectPlug client
+
+-- | Background thread: receives daemon messages and updates screen context.
+operatorDaemonReader :: PlugClient -> IORef Text -> IO ()
+operatorDaemonReader client screenRef = go
   where
-    loop st wd = do
-      TIO.putStr "> "
-      mLine <- E.try TIO.getLine :: IO (Either E.IOException Text)
-      case mLine of
-        Left _ -> pure ()
-        Right line -> do
-          (st', response) <- agentStep st wd line
-          TIO.putStrLn response
-          loop st' wd
+    go = do
+      result <- recvMsg client
+      case result of
+        Left _err -> hPutStrLn stderr "tank operator: daemon connection lost"
+        Right env -> do
+          case mePayload env of
+            MsgOutput _cid bs -> do
+              -- Accumulate raw output as context (simplified — real impl would use VTerm)
+              let chunk = TE.decodeUtf8With (\_ _ -> Just '?') bs
+              modifyIORef' screenRef (\old -> T.takeEnd 4096 (old <> chunk))
+            _ -> pure ()
+          go
+
+-- | REPL loop for operator prompts.
+replLoop :: AgentState -> FilePath -> Maybe (IORef Text) -> IO ()
+replLoop st wd mScreenRef = do
+  TIO.putStr "> "
+  hFlush stdout
+  mLine <- E.try TIO.getLine :: IO (Either E.IOException Text)
+  case mLine of
+    Left _ -> pure ()
+    Right line -> do
+      -- Include screen context if available
+      ctx <- case mScreenRef of
+        Nothing -> pure ""
+        Just ref -> do
+          screen <- readIORef ref
+          if T.null screen
+            then pure ""
+            else pure $ "\n\n[Current terminal output (last 4096 chars)]:\n" <> screen <> "\n\n"
+      let fullMsg = if T.null ctx then line else ctx <> line
+      (st', response) <- agentStep st wd fullMsg
+      TIO.putStrLn response
+      replLoop st' wd mScreenRef

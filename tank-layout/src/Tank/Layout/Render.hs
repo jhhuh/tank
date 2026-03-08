@@ -113,7 +113,7 @@ applyStyle grid rect@(Rect x y w h) (Style border (Edges pt pr pb pl) title_ bg)
 -- | Fill a rect with a character and colors.
 fillRect :: CellGrid -> Rect -> Char -> Color -> Color -> CellGrid
 fillRect grid (Rect rx ry rw rh) ch fg bg =
-  foldl (\g (col, row) -> setCell g col row (Cell ch fg bg False False))
+  foldl (\g (col, row) -> setCell g col row (Cell ch fg bg False False False False False False))
         grid
         [(c, r) | r <- [ry .. ry + rh - 1], c <- [rx .. rx + rw - 1]]
 
@@ -123,7 +123,7 @@ drawBorder grid (Rect rx ry rw rh) bs bc title_
   | rw < 2 || rh < 2 = grid
   | otherwise =
       let (tl, tr, bl, br, horiz, vert) = borderChars bs
-          mkC ch = Cell ch bc Default False False
+          mkC ch = Cell ch bc Default False False False False False False
           -- Corners
           g1 = setCell grid  rx          ry          (mkC tl)
           g2 = setCell g1    (rx+rw-1)   ry          (mkC tr)
@@ -167,7 +167,7 @@ stampContent grid (Rect rx ry rw rh) (Text spans_) =
 stampContent grid (Rect rx ry rw rh) (Fill ch fg) =
   foldl (\g (col, row) ->
     let existBg = cellBg (getCell g col row)
-    in setCell g col row (Cell ch fg existBg False False))
+    in setCell g col row (Cell ch fg existBg False False False False False False))
     grid
     [(c_, r_) | r_ <- [ry .. ry + rh - 1], c_ <- [rx .. rx + rw - 1]]
 stampContent grid (Rect rx ry rw rh) (CellContent src) =
@@ -201,7 +201,7 @@ stampSpans grid startX startY maxW maxH spans_ =
         | otherwise   =
             let existBg = cellBg (getCell g (startX + col) (startY + row))
             in ( setCell g (startX + col) (startY + row)
-                    (Cell ch fg existBg bold dim_)
+                    (Cell ch fg existBg bold dim_ False False False False)
                , col + 1, row)
   in go grid 0 0 spans_
 

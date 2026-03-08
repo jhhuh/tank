@@ -1,11 +1,14 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Tank.Terminal.CellAdapterSpec (spec) where
 
 import Test.Hspec
 import Data.UUID (nil)
 import Tank.Core.CRDT (ReplicaId(..))
+import Tank.Core.Types (GridSnapshot(..), CellUpdate(..))
 import Tank.Terminal.Grid (GridCell(..), Color(..), CellAttrs(..), defaultAttrs, defaultCell)
 import qualified Tank.Terminal.Grid as VT
 import qualified Tank.Layout.Cell as LC
+import qualified Tank.Terminal.Emulator as Em
 import Tank.Terminal.CellAdapter
 
 rid :: ReplicaId
@@ -87,3 +90,29 @@ spec = do
       LC.getCell result 1 1 `shouldBe` convertGridCell cell
       -- Row 0 col 0 is unwritten
       LC.getCell result 0 0 `shouldBe` LC.defaultCell
+
+  describe "vtermToSnapshot" $ do
+    it "captures non-empty cells from VTerm" $ do
+      let vt = Em.vtFeed "AB" (Em.mkVTerm 5 3)
+          snap = vtermToSnapshot vt 0 rid
+      gsWidth snap `shouldBe` 5
+      gsHeight snap `shouldBe` 3
+      length (gsCells snap) `shouldBe` 2
+      -- First cell update: row 0, col 0, char 'A'
+      let c0 = head (gsCells snap)
+      cuAbsLine c0 `shouldBe` 0
+      cuCol c0 `shouldBe` 0
+      VT.gcCodepoint (cuCell c0) `shouldBe` 'A'
+
+    it "skips empty cells" $ do
+      let vt = Em.mkVTerm 10 5
+          snap = vtermToSnapshot vt 0 rid
+      gsCells snap `shouldBe` []
+
+    it "preserves bold attribute in snapshot" $ do
+      let vt = Em.vtFeed "\ESC[1mX" (Em.mkVTerm 5 1)
+          snap = vtermToSnapshot vt 0 rid
+      length (gsCells snap) `shouldBe` 1
+      let c = head (gsCells snap)
+      VT.gcCodepoint (cuCell c) `shouldBe` 'X'
+      VT.attrBold (VT.gcAttrs (cuCell c)) `shouldBe` True

@@ -3,6 +3,7 @@ module Tank.Daemon.RouterSpec (spec) where
 
 import Test.Hspec
 import Data.UUID (nil)
+import qualified Data.UUID as UUID
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Control.Concurrent.STM
@@ -118,3 +119,37 @@ spec = describe "Router" $ do
         delta = DeltaViewport (ViewportUpdate 10 100 (ReplicaId nil))
     result <- routeMessage ds stdin (mkEnvelope (MsgStateUpdate cid delta))
     result `shouldBe` [Broadcast cid (MsgStateUpdate cid delta)]
+
+  it "notifies PTY owner when a different plug attaches" $ do
+    ds <- newDaemonState
+    let cid = CellId nil
+        ownerPid = PlugId nil
+        -- Create cell with ownerPid as PTY owner
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    -- A different plug attaches
+    let otherUuid = UUID.fromWords 1 2 3 4
+        otherPid = PlugId otherUuid
+        otherEnv = MessageEnvelope 1 otherPid TargetBroadcast 1
+                     (MsgCellAttach cid otherPid)
+    result <- routeMessage ds stdin otherEnv
+    result `shouldBe` [SendTo ownerPid (MsgCellAttach cid otherPid)]
+
+  it "does not notify when PTY owner attaches itself" $ do
+    ds <- newDaemonState
+    let cid = CellId nil
+        pid = PlugId nil
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    result <- routeMessage ds stdin (mkEnvelope (MsgCellAttach cid pid))
+    result `shouldBe` []
+
+  it "forwards MsgFetchLines to PTY owner" $ do
+    ds <- newDaemonState
+    let cid = CellId nil
+        ownerPid = PlugId nil
+    _ <- routeMessage ds stdin (mkEnvelope (MsgCellCreate cid "/tmp"))
+    let otherUuid = UUID.fromWords 1 2 3 4
+        otherPid = PlugId otherUuid
+        otherEnv = MessageEnvelope 1 otherPid TargetBroadcast 1
+                     (MsgFetchLines cid 0 100)
+    result <- routeMessage ds stdin otherEnv
+    result `shouldBe` [SendTo ownerPid (MsgFetchLines cid 0 100)]

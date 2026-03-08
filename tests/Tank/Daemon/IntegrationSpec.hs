@@ -110,6 +110,14 @@ spec = describe "Daemon integration" $ do
         (MsgCellAttach cid pid2)
       threadDelay 50000
 
+      -- Plug 1 receives attach notification for plug2
+      notif <- readEnvelope h1
+      case notif of
+        Right env -> case mePayload env of
+          MsgCellAttach _ _ -> pure ()  -- expected: PTY owner gets notified
+          other -> expectationFailure $ "unexpected: " ++ show other
+        Left err -> expectationFailure $ "notification failed: " ++ err
+
       -- Plug 1 sends MsgOutput
       writeEnvelope h1 $ MessageEnvelope 1 pid1 TargetBroadcast 4
         (MsgOutput cid "hello from plug1")

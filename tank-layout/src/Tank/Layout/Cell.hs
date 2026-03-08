@@ -21,15 +21,19 @@ data Color = Default | RGB !Word8 !Word8 !Word8
   deriving (Eq, Show)
 
 data Cell = Cell
-  { cellChar :: !Char
-  , cellFg   :: !Color
-  , cellBg   :: !Color
-  , cellBold :: !Bool
-  , cellDim  :: !Bool
+  { cellChar      :: !Char
+  , cellFg        :: !Color
+  , cellBg        :: !Color
+  , cellBold      :: !Bool
+  , cellDim       :: !Bool
+  , cellUnderline :: !Bool
+  , cellItalic    :: !Bool
+  , cellInverse   :: !Bool
+  , cellBlink     :: !Bool
   } deriving (Eq, Show)
 
 defaultCell :: Cell
-defaultCell = Cell ' ' Default Default False False
+defaultCell = Cell ' ' Default Default False False False False False False
 
 -- Row-major grid: outer vector = rows, inner = columns
 newtype CellGrid = CellGrid { gridRows :: Vector (Vector Cell) }
@@ -66,4 +70,4 @@ stampText :: CellGrid -> Int -> Int -> Color -> Color -> Text -> CellGrid
 stampText grid startCol row fg bg txt =
   fst $ T.foldl' step (grid, startCol) txt
   where
-    step (g, col) ch = (setCell g col row (Cell ch fg bg False False), col + 1)
+    step (g, col) ch = (setCell g col row (Cell ch fg bg False False False False False False), col + 1)

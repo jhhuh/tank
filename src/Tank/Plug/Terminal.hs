@@ -6,6 +6,7 @@ module Tank.Plug.Terminal
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Exception (IOException, bracket_, finally, SomeException, try)
 import Control.Monad (void, when, unless, forM_)
 import Data.ByteString (ByteString)
@@ -42,8 +43,10 @@ import Tank.Plug.Operator.Overlay
   , addMessage, setStatus
   )
 import qualified Data.Set as Set
+import Data.UUID (nil)
 import Data.UUID.V4 (nextRandom)
-import Tank.Core.Types (CellId(..), PlugCapability(..))
+import Tank.Core.CRDT (ReplicaId(..))
+import Tank.Core.Types (CellId(..), PlugCapability(..), GridDelta(..))
 import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
 import Tank.Plug.Client (PlugClient, connectDaemon, sendMsg, recvMsg, disconnectPlug, pcPlugId)
 import Tank.Daemon.Socket (socketPath)
@@ -53,7 +56,7 @@ import Tank.Terminal.Emulator
   , hasFlag, attrBold, attrDim, attrUnderline, attrInverse
   , vtScrollbackLines, vtScrollbackSize
   )
-import Tank.Terminal.CellAdapter (vtermToCellGrid)
+import Tank.Terminal.CellAdapter (vtermToCellGrid, vtermToSnapshot)
 import Tank.Layout.Render (renderLayout)
 import Tank.Layout.Cell (CellGrid(..))
 import qualified Tank.Layout.Cell as LC
@@ -99,6 +102,7 @@ data TermState = TermState
   , tsShell     :: !String
   , tsCopyScroll :: !(IORef Int)  -- 0 = normal, >0 = copy mode scroll offset
   , tsDaemon     :: !(IORef (Maybe PlugClient))
+  , tsRenderLock :: !(MVar ())   -- serializes all stdout writes
   }
 
 -- | Run the terminal UI plug
@@ -139,6 +143,7 @@ runTerminalPlug = do
       colsRef    <- newIORef cols
       copyRef    <- newIORef 0
       daemonRef  <- newIORef Nothing
+      renderLock <- newMVar ()
       pure TermState
         { tsPanes      = panesRef
         , tsWindows    = windowsRef
@@ -151,6 +156,7 @@ runTerminalPlug = do
         , tsShell      = shell
         , tsCopyScroll = copyRef
         , tsDaemon     = daemonRef
+        , tsRenderLock = renderLock
         }
 
     -- Try connecting to daemon (optional — works standalone if not running)
@@ -177,11 +183,15 @@ runTerminalPlug = do
       case mClient' of
         Just client' -> disconnectPlug client'
         Nothing -> pure ()
+      -- Restore fd flags
+      setFdOption stdInput NonBlockingRead False
       -- Restore terminal
       (_, finalRows) <- getTermSize
       BS.hPut stdout $ BS8.pack $
-        "\x1b[r\x1b[" ++ show (finalRows + 1) ++ ";1H\x1b[2K"
+        "\x1b[r\x1b[" ++ show (finalRows + 1) ++ ";1H\x1b[2K\x1b[?25h"
       hFlush stdout
+      hSetBuffering stdout LineBuffering
+      hSetBuffering stdin LineBuffering
 
 -- | Create a new pane with a PTY
 createPane :: TermState -> Int -> Int -> IO Int
@@ -206,6 +216,11 @@ createPane ts cols rows = do
         (MsgCellCreate cid ".")
       sendMsg client $ MessageEnvelope 1 pid TargetBroadcast 0
         (MsgCellAttach cid pid)
+      -- Send initial grid snapshot
+      vt <- readIORef pVtRef
+      let snapshot = vtermToSnapshot vt 0 (ReplicaId cuid)
+      sendMsg client $ MessageEnvelope 1 pid (TargetCell cid) 0
+        (MsgStateUpdate cid (DeltaSnapshot snapshot))
       pure (Just cid)
 
   let pane = Pane pty pRunRef pOvRef pAgRef pVtRef mCid
@@ -298,6 +313,10 @@ findPaneRegion layout paneId totalW totalH = go layout 0 0 totalW totalH
       in if fst4 result1 >= 0 then result1 else result2
     fst4 (a, _, _, _) = a
 
+-- | Run an IO action while holding the render lock.
+withRender :: TermState -> IO () -> IO ()
+withRender ts = withMVar (tsRenderLock ts) . const
+
 -- | PTY reader thread
 paneReaderThread :: TermState -> Pane -> Int -> IO ()
 paneReaderThread ts pane paneId = do
@@ -337,13 +356,13 @@ paneReaderThread ts pane paneId = do
                   layout <- readIORef (wLayout win)
                   let isSingle = case layout of LPane _ -> True; _ -> False
                   if isSingle && layoutContains paneId layout
-                    then do
+                    then withRender ts $ do
                       -- Single-pane window: raw passthrough for performance
                       BS.hPut stdout bs
                       hFlush stdout
                       ov <- readIORef (pOverlay pane)
                       when (osVisible ov) $ renderOverlayNow ov
-                    else when (layoutContains paneId layout) $ do
+                    else when (layoutContains paneId layout) $
                       -- Multi-pane: render this pane from VTerm
                       renderSinglePane ts pane paneId
             go fd'
@@ -371,7 +390,21 @@ daemonReaderThread ts client = go
                 case matching of
                   (pane:_) -> writePty (pPty pane) bytes
                   []       -> pure ()
-              _ -> pure ()  -- ignore other messages for now
+              MsgCellAttach cid _attachingPid -> do
+                -- A new plug attached — send a grid snapshot so it has current state
+                panes <- readIORef (tsPanes ts)
+                let matching = [ p | p <- IM.elems panes
+                               , pCellId p == Just cid ]
+                case matching of
+                  (pane:_) -> do
+                    vt <- readIORef (pVTerm pane)
+                    let pid = pcPlugId client
+                        snapshot = vtermToSnapshot vt 0 (ReplicaId nil)
+                    _ <- try (sendMsg client $ MessageEnvelope 1 pid (TargetCell cid) 0
+                           (MsgStateUpdate cid (DeltaSnapshot snapshot))) :: IO (Either IOException ())
+                    pure ()
+                  [] -> pure ()
+              _ -> pure ()  -- ignore other messages
             go
 
 -- | Check if a pane id is in a layout
@@ -428,8 +461,6 @@ paneProcessWatcher ts paneId ph = do
                   else do
                     let (nextWinId, _) = IM.findMin remaining
                     switchToWindow ts nextWinId
-                    drawStatusLine ts False
-                    hFlush stdout
             Just layout' -> do
               writeIORef (wLayout win) layout'
               -- Update active pane if needed
@@ -554,7 +585,7 @@ emitGrid (CellGrid rows) = do
 -- Preserves active-pane highlighting (green for active, dim for inactive).
 drawPaneBorders :: PaneLayout -> Int -> Int -> Int -> Int -> Int -> IO ()
 drawPaneBorders (LPane _) _ _ _ _ _ = pure ()
-drawPaneBorders (LSplit dir _ratio l1 l2) activePid r c w h = do
+drawPaneBorders (LSplit dir ratio l1 l2) activePid r c w h = do
   let activeInL1 = layoutContains activePid l1
       activeInL2 = layoutContains activePid l2
       -- Green for border next to active pane, dim for inactive
@@ -563,26 +594,26 @@ drawPaneBorders (LSplit dir _ratio l1 l2) activePid r c w h = do
                   else "\x1b[2m"   -- dim
   case dir of
     PVertical -> do
-      let w1 = w `div` 2
+      let w1 = floor (fromIntegral w * ratio) :: Int
       forM_ [0 .. h - 1] $ \row ->
         BS.hPut stdout $ BS8.pack
-          ("\x1b[" ++ show (r + row + 1) ++ ";" ++ show (c + w1 + 1) ++ "H" ++ borderSGR)
+          ("\x1b[" ++ show (r + row + 1) ++ ";" ++ show (c + w1) ++ "H" ++ borderSGR)
           <> encodeUtf8 "\x2502"
       BS.hPut stdout "\x1b[0m"
-      drawPaneBorders l1 activePid r c w1 h
-      drawPaneBorders l2 activePid r (c + w1 + 1) (w - w1 - 1) h
+      drawPaneBorders l1 activePid r c (w1 - 1) h
+      drawPaneBorders l2 activePid r (c + w1) (w - w1) h
     PHorizontal -> do
-      let h1 = h `div` 2
+      let h1 = floor (fromIntegral h * ratio) :: Int
       BS.hPut stdout $ BS8.pack
-        ("\x1b[" ++ show (r + h1 + 1) ++ ";" ++ show (c + 1) ++ "H" ++ borderSGR)
+        ("\x1b[" ++ show (r + h1) ++ ";" ++ show (c + 1) ++ "H" ++ borderSGR)
         <> BS.concat (replicate w (encodeUtf8 "\x2500"))
       BS.hPut stdout "\x1b[0m"
-      drawPaneBorders l1 activePid r c w h1
-      drawPaneBorders l2 activePid (r + h1 + 1) c w (h - h1 - 1)
+      drawPaneBorders l1 activePid r c w (h1 - 1)
+      drawPaneBorders l2 activePid (r + h1) c w (h - h1)
 
 -- | Render all visible panes in the active window
 renderAllPanes :: TermState -> IO ()
-renderAllPanes ts = do
+renderAllPanes ts = withRender ts $ do
   mwin <- getActiveWindow ts
   case mwin of
     Nothing -> pure ()
@@ -666,7 +697,7 @@ sgrForAttrs attrs =
 
 -- | Render a single pane (for incremental updates in split mode)
 renderSinglePane :: TermState -> Pane -> Int -> IO ()
-renderSinglePane ts pane paneId = do
+renderSinglePane ts pane paneId = withRender ts $ do
   mwin <- getActiveWindow ts
   case mwin of
     Nothing -> pure ()
@@ -721,10 +752,10 @@ handleNormalInput ts byte c prefix = do
       if prefix then do
         writeIORef (tsPrefix ts) False
         handlePrefixCommand ts byte pane
-        drawStatusLine ts False
+        withRender ts $ drawStatusLine ts False
       else if byte == 2 then do
         writeIORef (tsPrefix ts) True
-        drawStatusLine ts True
+        withRender ts $ drawStatusLine ts True
       else do
         overlay <- readIORef (pOverlay pane)
         if osVisible overlay then do
@@ -746,12 +777,12 @@ handleNormalInput ts byte c prefix = do
                       modifyIORef' (pOverlay pane) $
                         addMessage role detail . setStatus (evType <> "…")
                       ov'' <- readIORef (pOverlay pane)
-                      renderOverlayNow ov''
+                      withRender ts $ renderOverlayNow ov''
                 (agent', response) <- agentStepWith agent workDir msg (Just progressCb)
                 writeIORef (pAgent pane) agent'
                 modifyIORef' (pOverlay pane) (addMessage Assistant response . setStatus "idle")
                 ov'' <- readIORef (pOverlay pane)
-                renderOverlayNow ov''
+                withRender ts $ renderOverlayNow ov''
             OAClose -> do
               writeIORef (pOverlay pane) overlay' { osVisible = False }
               renderAllPanes ts
@@ -854,7 +885,7 @@ handleCopyModeKey ts byte = do
 
 -- | Render the screen in copy mode (scrollback + current screen)
 renderCopyMode :: TermState -> IO ()
-renderCopyMode ts = do
+renderCopyMode ts = withRender ts $ do
   mPane <- getActivePane ts
   case mPane of
     Nothing -> pure ()
@@ -973,7 +1004,7 @@ handleResizeAll ts = do
       layout <- readIORef (wLayout win)
       resizePanesInLayout ts layout
   -- Update scroll region and redraw
-  BS.hPut stdout $ BS8.pack $ "\x1b[1;" ++ show rows ++ "r"
+  withRender ts $ BS.hPut stdout $ BS8.pack $ "\x1b[1;" ++ show rows ++ "r"
   renderAllPanes ts
 
 -- | Get terminal size (cols, rows excluding status line)

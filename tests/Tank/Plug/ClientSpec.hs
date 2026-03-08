@@ -65,6 +65,14 @@ spec = describe "Plug.Client" $ do
         (MsgCellAttach cid pid2)
       threadDelay 50000
 
+      -- Client 1 receives attach notification for client2
+      notif <- recvMsg client1
+      case notif of
+        Right env -> case mePayload env of
+          MsgCellAttach _ _ -> pure ()  -- expected
+          other -> expectationFailure $ "unexpected: " ++ show other
+        Left err -> expectationFailure $ "notification failed: " ++ err
+
       -- Client 1 sends output
       sendMsg client1 $ MessageEnvelope 1 pid1 TargetBroadcast 0
         (MsgOutput cid "hello world")
