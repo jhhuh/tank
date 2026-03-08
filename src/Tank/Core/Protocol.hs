@@ -7,7 +7,7 @@ module Tank.Core.Protocol
 import Data.ByteString (ByteString)
 import Data.Word (Word64)
 import Data.Text (Text)
-import Tank.Core.Types (CellId, PlugId, PlugInfo)
+import Tank.Core.Types (CellId, GridDelta, PlugId, PlugInfo)
 
 data Target
   = TargetCell !CellId
@@ -31,7 +31,7 @@ data Message
   | MsgCellDestroy !CellId
   | MsgCellAttach !CellId !PlugId
   | MsgCellDetach !CellId !PlugId
-  | MsgStateUpdate !CellId !ByteString  -- CRDT delta (serialized)
+  | MsgStateUpdate !CellId !GridDelta   -- CRDT grid delta
   | MsgFetchLines !CellId !Word64 !Word64  -- from_line, to_line
   | MsgFetchLinesResponse !CellId ![(Word64, Text)]  -- line_num, content
   | MsgListCells
