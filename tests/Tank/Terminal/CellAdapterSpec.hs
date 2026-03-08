@@ -44,7 +44,7 @@ spec = do
             { gcCodepoint = 'X'
             , gcFg = ColorRGB 10 20 30
             , gcBg = DefaultColor
-            , gcAttrs = CellAttrs True False False False
+            , gcAttrs = CellAttrs True False False False False False
             }
           result = convertGridCell gc
       LC.cellChar result `shouldBe` 'X'
@@ -60,7 +60,7 @@ spec = do
     it "converts a grid with written cells" $ do
       let vtGrid = VT.mkGrid rid 4 3 0 0
           cell1 = GridCell 'A' (ColorRGB 255 0 0) DefaultColor defaultAttrs
-          cell2 = GridCell 'B' DefaultColor (Color256 4) (CellAttrs True False False False)
+          cell2 = GridCell 'B' DefaultColor (Color256 4) (CellAttrs True False False False False False)
           -- Write cell1 at line 0 col 0, cell2 at line 1 col 2
           vtGrid' = VT.writeCell rid 1 0 0 0 cell1
                   $ VT.writeCell rid 2 0 1 2 cell2

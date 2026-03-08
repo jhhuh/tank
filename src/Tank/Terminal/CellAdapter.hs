@@ -31,7 +31,7 @@ convertGridCell gc = LC.Cell
   , LC.cellFg   = convertColor (VT.gcFg gc)
   , LC.cellBg   = convertColor (VT.gcBg gc)
   , LC.cellBold = VT.attrBold (VT.gcAttrs gc)
-  , LC.cellDim  = False  -- VTerm CellAttrs has no dim field
+  , LC.cellDim  = VT.attrDim (VT.gcAttrs gc)
   }
 
 -- | Convert VTerm Color to tank-layout Color.

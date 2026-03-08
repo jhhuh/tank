@@ -29,10 +29,12 @@ data CellAttrs = CellAttrs
   , attrItalic    :: !Bool
   , attrUnderline :: !Bool
   , attrReverse   :: !Bool
+  , attrBlink     :: !Bool
+  , attrDim       :: !Bool
   } deriving (Eq, Show)
 
 defaultAttrs :: CellAttrs
-defaultAttrs = CellAttrs False False False False
+defaultAttrs = CellAttrs False False False False False False
 
 data GridCell = GridCell
   { gcCodepoint :: !Char
