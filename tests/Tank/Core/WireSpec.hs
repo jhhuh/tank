@@ -5,9 +5,11 @@ import qualified Data.Set as Set
 import Data.UUID (nil)
 import Test.Hspec
 
+import Tank.Core.CRDT (ReplicaId(..))
 import Tank.Core.Protocol (Message(..), MessageEnvelope(..), Target(..))
-import Tank.Core.Types (CellId(..), PlugId(..), PlugCapability(..), PlugInfo(..))
+import Tank.Core.Types (CellId(..), PlugId(..), PlugCapability(..), PlugInfo(..), GridDelta(..), CellUpdate(..), ViewportUpdate(..), EpochUpdate(..), GridSnapshot(..))
 import Tank.Core.Wire (toWire, fromWire)
+import Tank.Terminal.Grid (GridCell(..), Color(..), defaultAttrs, defaultCell)
 
 -- | Helper: wrap a message in an envelope for round-trip testing.
 mkEnvelope :: Message -> MessageEnvelope
@@ -88,3 +90,54 @@ spec = describe "Wire round-trip" $ do
   it "version narrowing: survives round-trip within Word16 range" $ do
     let env = (mkEnvelope MsgListCells) { meVersion = 255 }
     fromWire (toWire env) `shouldBe` Right env
+
+  it "MsgStateUpdate with DeltaCells" $ do
+    let cu = CellUpdate
+              { cuAbsLine   = 5
+              , cuCol       = 10
+              , cuCell      = GridCell 'A' DefaultColor (Color256 1) defaultAttrs
+              , cuEpoch     = 0
+              , cuTimestamp = 100
+              , cuReplicaId = ReplicaId nil
+              }
+        msg = MsgStateUpdate (CellId nil) (DeltaCells [cu])
+    roundTrip msg `shouldBe` Right (mkEnvelope msg)
+
+  it "MsgStateUpdate with DeltaViewport" $ do
+    let vu = ViewportUpdate
+              { vuAbsLine  = 42
+              , vuTimestamp = 200
+              , vuReplicaId = ReplicaId nil
+              }
+        msg = MsgStateUpdate (CellId nil) (DeltaViewport vu)
+    roundTrip msg `shouldBe` Right (mkEnvelope msg)
+
+  it "MsgStateUpdate with DeltaEpoch" $ do
+    let eu = EpochUpdate
+              { euEpoch     = 3
+              , euTimestamp  = 300
+              , euReplicaId  = ReplicaId nil
+              }
+        msg = MsgStateUpdate (CellId nil) (DeltaEpoch eu)
+    roundTrip msg `shouldBe` Right (mkEnvelope msg)
+
+  it "MsgStateUpdate with DeltaSnapshot" $ do
+    let cu = CellUpdate
+              { cuAbsLine   = 0
+              , cuCol       = 0
+              , cuCell      = defaultCell
+              , cuEpoch     = 1
+              , cuTimestamp = 50
+              , cuReplicaId = ReplicaId nil
+              }
+        snap = GridSnapshot
+                { gsWidth       = 80
+                , gsHeight      = 24
+                , gsBufferAbove = 200
+                , gsBufferBelow = 100
+                , gsViewport    = 0
+                , gsEpoch       = 1
+                , gsCells       = [cu]
+                }
+        msg = MsgStateUpdate (CellId nil) (DeltaSnapshot snap)
+    roundTrip msg `shouldBe` Right (mkEnvelope msg)
