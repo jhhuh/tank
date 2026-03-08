@@ -11,19 +11,26 @@ import qualified Capnp.Classes as C
 import qualified Capnp.GenHelpers as GH
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Char (chr, ord)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.UUID (UUID, toByteString, fromByteString)
-import Data.Word (Word16, Word64)
+import Data.Word (Word16, Word32, Word64)
 
+import Tank.Core.CRDT (ReplicaId(..))
 import Tank.Core.Protocol
   ( Message(..)
   , MessageEnvelope(..)
   , Target(..)
   )
-import Tank.Core.Types (CellId(..), PlugId(..), PlugCapability(..), PlugInfo(..))
+import Tank.Core.Types
+  ( CellId(..), PlugId(..), PlugCapability(..), PlugInfo(..)
+  , GridDelta(..), CellUpdate(..), ViewportUpdate(..), EpochUpdate(..), GridSnapshot(..)
+  )
+import Tank.Terminal.Grid (GridCell(..), Color(..), CellAttrs(..))
+import qualified Tank.Gen.Grid as G
 import qualified Tank.Gen.Protocol as W
 
 -- --------------------------------------------------------------------
@@ -83,6 +90,60 @@ capsToWire caps = W.PlugCapabilities
   (Set.member CapDevshell caps)
   (Set.member CapProcessMgr caps)
 
+colorToWire :: Color -> C.Parsed G.Color
+colorToWire DefaultColor      = G.Color G.Color'default_
+colorToWire (Color256 n)      = G.Color (G.Color'index (fromIntegral n))
+colorToWire (ColorRGB r g b)  = G.Color (G.Color'rgb (G.RGB (fromIntegral r) (fromIntegral g) (fromIntegral b)))
+
+cellAttrsToWire :: CellAttrs -> C.Parsed G.CellAttrs
+cellAttrsToWire a = G.CellAttrs
+  (attrBold a) (attrItalic a) (attrUnderline a)
+  (attrReverse a) (attrBlink a) (attrDim a)
+
+gridCellToWire :: GridCell -> Word64 -> Word64 -> ReplicaId -> C.Parsed G.GridCell
+gridCellToWire gc epoch ts (ReplicaId rid) = G.GridCell
+  (fromIntegral (ord (gcCodepoint gc)) :: Word32)
+  (colorToWire (gcFg gc))
+  (colorToWire (gcBg gc))
+  (cellAttrsToWire (gcAttrs gc))
+  epoch
+  ts
+  (uuidToBS rid)
+
+cellUpdateToWire :: CellUpdate -> C.Parsed G.CellUpdate
+cellUpdateToWire cu = G.CellUpdate
+  (cuAbsLine cu)
+  (fromIntegral (cuCol cu) :: Word16)
+  (gridCellToWire (cuCell cu) (cuEpoch cu) (cuTimestamp cu) (cuReplicaId cu))
+
+gridDeltaToWire :: GridDelta -> C.Parsed G.GridDelta
+gridDeltaToWire (DeltaCells cus) =
+  G.GridDelta (G.GridDelta'cells (map cellUpdateToWire cus))
+gridDeltaToWire (DeltaViewport vu) =
+  G.GridDelta (G.GridDelta'viewport (viewportUpdateToWire vu))
+gridDeltaToWire (DeltaEpoch eu) =
+  G.GridDelta (G.GridDelta'epochUpdate (epochUpdateToWire eu))
+gridDeltaToWire (DeltaSnapshot snap) =
+  G.GridDelta (G.GridDelta'snapshot (gridSnapshotToWire snap))
+
+viewportUpdateToWire :: ViewportUpdate -> C.Parsed G.ViewportUpdate
+viewportUpdateToWire vu = G.ViewportUpdate
+  (vuAbsLine vu) (vuTimestamp vu) (uuidToBS (let ReplicaId u = vuReplicaId vu in u))
+
+epochUpdateToWire :: EpochUpdate -> C.Parsed G.EpochUpdate
+epochUpdateToWire eu = G.EpochUpdate
+  (euEpoch eu) (euTimestamp eu) (uuidToBS (let ReplicaId u = euReplicaId eu in u))
+
+gridSnapshotToWire :: GridSnapshot -> C.Parsed G.GridSnapshot
+gridSnapshotToWire gs = G.GridSnapshot
+  (fromIntegral (gsWidth gs) :: Word16)
+  (fromIntegral (gsHeight gs) :: Word16)
+  (fromIntegral (gsBufferAbove gs) :: Word16)
+  (fromIntegral (gsBufferBelow gs) :: Word16)
+  (gsViewport gs)
+  (gsEpoch gs)
+  (map cellUpdateToWire (gsCells gs))
+
 messageToWire :: Message -> C.Parsed W.Message
 messageToWire = mkMsg . go
   where
@@ -96,7 +157,8 @@ messageToWire = mkMsg . go
       W.Message'cellAttach (W.CellAttach (uuidToBS cu) (uuidToBS pu))
     go (MsgCellDetach (CellId cu) (PlugId pu)) =
       W.Message'cellDetach (W.CellDetach (uuidToBS cu) (uuidToBS pu))
-    go (MsgStateUpdate _ _) = W.Message'error "stateUpdate not yet supported"
+    go (MsgStateUpdate cid delta) =
+      W.Message'stateUpdate (W.StateUpdate (uuidToBS (let CellId u = cid in u)) (gridDeltaToWire delta))
     go (MsgFetchLines (CellId u) from to) =
       W.Message'fetchLines (W.FetchLines (uuidToBS u) from to)
     go (MsgFetchLinesResponse (CellId u) lns) =
@@ -159,6 +221,68 @@ parseCellId bs = CellId <$> bsToUUID bs
 parsePlugId :: ByteString -> Either String PlugId
 parsePlugId bs = PlugId <$> bsToUUID bs
 
+colorFromWire :: C.Parsed G.Color -> Either String Color
+colorFromWire (G.Color w) = case w of
+  G.Color'default_  -> Right DefaultColor
+  G.Color'index n   -> Right (Color256 (fromIntegral n))
+  G.Color'rgb (G.RGB r g b) -> Right (ColorRGB (fromIntegral r) (fromIntegral g) (fromIntegral b))
+  G.Color'unknown' n -> Left $ "unknown Color variant: " ++ show n
+
+cellAttrsFromWire :: C.Parsed G.CellAttrs -> CellAttrs
+cellAttrsFromWire (G.CellAttrs bo it ul rv bl di) =
+  CellAttrs bo it ul rv bl di
+
+gridCellFromWire :: C.Parsed G.GridCell -> Either String (GridCell, Word64, Word64, ReplicaId)
+gridCellFromWire (G.GridCell cp fg bg attrs epoch ts ridBs) = do
+  fg' <- colorFromWire fg
+  bg' <- colorFromWire bg
+  rid <- ReplicaId <$> bsToUUID ridBs
+  let cell = GridCell (chr (fromIntegral cp)) fg' bg' (cellAttrsFromWire attrs)
+  Right (cell, epoch, ts, rid)
+
+cellUpdateFromWire :: C.Parsed G.CellUpdate -> Either String CellUpdate
+cellUpdateFromWire (G.CellUpdate absLn col gcW) = do
+  (cell, epoch, ts, rid) <- gridCellFromWire gcW
+  Right CellUpdate
+    { cuAbsLine   = absLn
+    , cuCol       = fromIntegral col
+    , cuCell      = cell
+    , cuEpoch     = epoch
+    , cuTimestamp = ts
+    , cuReplicaId = rid
+    }
+
+viewportUpdateFromWire :: C.Parsed G.ViewportUpdate -> Either String ViewportUpdate
+viewportUpdateFromWire (G.ViewportUpdate absLn ts ridBs) = do
+  rid <- ReplicaId <$> bsToUUID ridBs
+  Right ViewportUpdate { vuAbsLine = absLn, vuTimestamp = ts, vuReplicaId = rid }
+
+epochUpdateFromWire :: C.Parsed G.EpochUpdate -> Either String EpochUpdate
+epochUpdateFromWire (G.EpochUpdate ep ts ridBs) = do
+  rid <- ReplicaId <$> bsToUUID ridBs
+  Right EpochUpdate { euEpoch = ep, euTimestamp = ts, euReplicaId = rid }
+
+gridSnapshotFromWire :: C.Parsed G.GridSnapshot -> Either String GridSnapshot
+gridSnapshotFromWire (G.GridSnapshot w h ba bb vp ep cells) = do
+  cells' <- traverse cellUpdateFromWire cells
+  Right GridSnapshot
+    { gsWidth       = fromIntegral w
+    , gsHeight      = fromIntegral h
+    , gsBufferAbove = fromIntegral ba
+    , gsBufferBelow = fromIntegral bb
+    , gsViewport    = vp
+    , gsEpoch       = ep
+    , gsCells       = cells'
+    }
+
+gridDeltaFromWire :: C.Parsed G.GridDelta -> Either String GridDelta
+gridDeltaFromWire (G.GridDelta w) = case w of
+  G.GridDelta'cells cus     -> DeltaCells <$> traverse cellUpdateFromWire cus
+  G.GridDelta'viewport vu   -> DeltaViewport <$> viewportUpdateFromWire vu
+  G.GridDelta'epochUpdate eu -> DeltaEpoch <$> epochUpdateFromWire eu
+  G.GridDelta'snapshot snap -> DeltaSnapshot <$> gridSnapshotFromWire snap
+  G.GridDelta'unknown' n    -> Left $ "unknown GridDelta variant: " ++ show n
+
 messageFromWire :: C.Parsed W.Message -> Either String Message
 messageFromWire (W.Message w) = case w of
   W.Message'plugRegister pi'   -> MsgPlugRegister <$> plugInfoFromWire pi'
@@ -176,7 +300,10 @@ messageFromWire (W.Message w) = case w of
     cid' <- parseCellId cid
     pid' <- parsePlugId pid
     Right $ MsgCellDetach cid' pid'
-  W.Message'stateUpdate _ -> Left "stateUpdate not yet supported"
+  W.Message'stateUpdate (W.StateUpdate cidBs deltaW) -> do
+    cid <- parseCellId cidBs
+    delta <- gridDeltaFromWire deltaW
+    Right $ MsgStateUpdate cid delta
   W.Message'fetchLines (W.FetchLines cid from to) -> do
     cid' <- parseCellId cid
     Right $ MsgFetchLines cid' from to
