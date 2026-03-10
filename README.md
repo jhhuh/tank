@@ -1,6 +1,8 @@
 # Tank
 
-Emacs is a Lisp machine disguised as an editor.
-Tank is a Plan 9 machine disguised as a terminal multiplexer.
+Design is in progress.
 
-Design is in progress. Previous prototype archived on `archive/v0-multiplexer`.
+*Simply put, if Emacs is a Lisp Machine that happens to be an editor,
+Tank wants to be Plan 9 that happens to be a terminal multiplexer.*
+
+Previous prototype archived on `archive/v0-multiplexer`.
